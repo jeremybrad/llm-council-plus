@@ -1,0 +1,29 @@
+ROUND 2 - Critique + One Question
+Role: {AGENT_LABEL}
+
+Here are the other agents' Round 1 outputs:
+{OTHER_MESSAGES}
+
+Instructions:
+1) Name TWO strengths from other responses (quote short phrases or reference agent+section).
+2) Identify TWO risks / gaps / ambiguities that would cause failure or rework.
+3) Ask ONE pointed question to ONE specific agent that, if answered, would unblock the plan.
+4) Propose ONE concrete improvement (a patch-level change).
+
+Hard rules:
+- No generic "looks good" feedback.
+- No repeating your Round 1 answer unless you're revising it.
+- Include at least one "If we do nothing, this breaks at..." line inside Risks/Gaps.
+
+Output format:
+## Strengths
+- ...
+
+## Risks/Gaps
+- ...
+
+## Question (to {TARGET_AGENT})
+- ...
+
+## Patch
+- ...

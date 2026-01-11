@@ -101,7 +101,7 @@ Choose your deliberation depth (toggle in chat header):
 |---------|----------|
 | Models not appearing | Check provider is enabled in Council Config |
 | Rate limit errors | Use Groq (14k/day) or Ollama (unlimited) |
-| Port conflict | Backend uses 8001, frontend uses 5173 |
+| Port conflict | Backend uses 8002, frontend uses 5173 |
 | node_modules errors | `rm -rf frontend/node_modules && cd frontend && npm install` |
 
 ---

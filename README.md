@@ -231,7 +231,7 @@ hostname -I
 
 **Manual setup (if not using start.sh):**
 ```bash
-# Backend already listens on 0.0.0.0:8001
+# Backend already listens on 0.0.0.0:8002
 
 # Frontend with network access
 cd frontend

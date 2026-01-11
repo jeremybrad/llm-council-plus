@@ -119,7 +119,13 @@ class Settings(BaseModel):
     stage3_prompt: str = STAGE3_PROMPT_DEFAULT
     
     # Execution Mode
-    execution_mode: str = "full"  # Default execution mode: 'chat_only', 'chat_ranking', 'full'
+    # Valid modes: 'chat_only', 'chat_ranking', 'full', 'roundtable'
+    execution_mode: str = "full"
+
+    # Roundtable Mode Settings
+    roundtable_num_rounds: int = 3  # Number of deliberation rounds (1-5)
+    roundtable_max_parallel: int = 2  # Max concurrent model queries (for local models)
+    roundtable_debug_prompts: bool = False  # Dump rendered prompts to data/debug/prompts/
 
 
 def get_settings() -> Settings:

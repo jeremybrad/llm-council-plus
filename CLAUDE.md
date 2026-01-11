@@ -29,12 +29,24 @@ npm run dev
 ```
 
 **Ports:**
-- Backend: `http://localhost:8001` (NOT 8000 - avoid conflicts)
+- Backend: `http://localhost:8002` (registered with Mission Control)
 - Frontend: `http://localhost:5173`
+
+**Port Selection Process:**
+When changing ports, ALWAYS check Mission Control first:
+```bash
+curl -s http://localhost:3333/api/services | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+used = sorted(set(p for s in data.get('services',[]) for p in s.get('ports',[])))
+print('Ports in use:', used)
+"
+```
+This prevents conflicts with other ecosystem services.
 
 **Network Access:**
 ```bash
-# Backend already listens on 0.0.0.0:8001
+# Backend already listens on 0.0.0.0:8002
 # Frontend with network access:
 cd frontend && npm run dev -- --host
 ```
@@ -179,7 +191,7 @@ useEffect(() => {
 
 ## Common Gotchas
 
-1. **Port Conflicts**: Backend uses 8001 (not 8000). Update `backend/main.py` and `frontend/src/api.js` together.
+1. **Port Conflicts**: Backend uses 8002. Check Mission Control (`curl http://localhost:3333/api/services`) before changing ports. Update `backend/main.py` and `frontend/src/api.js` together.
 
 2. **CORS Errors**: Frontend origins must match `main.py` CORS middleware (localhost:5173 and :3000).
 

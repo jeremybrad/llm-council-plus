@@ -14,14 +14,15 @@ from . import storage
 from .council import generate_conversation_title, generate_search_query, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, PROVIDERS
 from .search import perform_web_search, SearchProvider
 from .settings import get_settings, update_settings, Settings, DEFAULT_COUNCIL_MODELS, DEFAULT_CHAIRMAN_MODEL, AVAILABLE_MODELS
+from .roundtable import run_roundtable, get_default_council, AgentConfig
 
 app = FastAPI(title="LLM Council Plus API")
 
 # Enable CORS for local development and network access
-# Allow requests from any hostname on ports 5173 and 3000 (frontend)
+# Allow requests from any hostname on ports 517x (Vite), 3000 (CRA), 8080 (common dev)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://.*:(5173|3000)",
+    allow_origin_regex=r"http://.*:(517[0-9]|3000|8080)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,7 +99,7 @@ async def delete_conversation(conversation_id: str):
 async def send_message_stream(conversation_id: str, body: SendMessageRequest, request: Request):
     """Send a message and stream the 3-stage council process."""
     # Validate execution_mode
-    valid_modes = ["chat_only", "chat_ranking", "full"]
+    valid_modes = ["chat_only", "chat_ranking", "full", "roundtable"]
     if body.execution_mode not in valid_modes:
         raise HTTPException(
             status_code=400,
@@ -175,6 +176,132 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                 extracted_query = search_result["extracted_query"]
                 yield f"data: {json.dumps({'type': 'search_complete', 'data': {'search_query': search_query, 'extracted_query': extracted_query, 'search_context': search_context, 'provider': provider.value}})}\n\n"
                 await asyncio.sleep(0.05)
+
+            # ========================================
+            # ROUNDTABLE MODE: Multi-round deliberation
+            # ========================================
+            if body.execution_mode == "roundtable":
+                settings = get_settings()
+
+                # Build council from configured models
+                council_models = settings.council_models
+                if not council_models or len(council_models) < 2:
+                    error_msg = "Roundtable requires at least 2 council models. Please configure models in settings."
+                    storage.add_error_message(conversation_id, error_msg)
+                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+                    return
+
+                agents = get_default_council(council_models)
+                moderator_model = settings.chairman_model  # Reuse chairman as moderator
+                chair_model = settings.chairman_model
+                num_rounds = settings.roundtable_num_rounds
+                max_parallel = settings.roundtable_max_parallel
+
+                yield f"data: {json.dumps({'type': 'roundtable_start', 'data': {'num_rounds': num_rounds, 'council_size': len(agents)}})}\n\n"
+                await asyncio.sleep(0.05)
+
+                # Stream roundtable execution
+                run_data = None
+                aborted = False
+                try:
+                    async for event in run_roundtable(
+                        conversation_id=conversation_id,
+                        question=body.content,
+                        agents=agents,
+                        moderator_model=moderator_model,
+                        chair_model=chair_model,
+                        num_rounds=num_rounds,
+                        context=search_context,
+                        max_parallel=max_parallel,
+                        request=request
+                    ):
+                        event_type = event.get("type")
+
+                        # Transform backend events to frontend format
+                        if event_type == "roundtable_init":
+                            # Already sent roundtable_start above, skip this
+                            continue
+
+                        elif event_type == "round_start":
+                            yield f"data: {json.dumps({'type': 'round_start', 'data': {'round_number': event.get('round_number'), 'round_name': event.get('round_name')}})}\n\n"
+
+                        elif event_type == "round_progress":
+                            # Transform to agent_response format for frontend
+                            yield f"data: {json.dumps({'type': 'agent_response', 'data': {'round_number': event.get('round_number'), 'response': event.get('response')}})}\n\n"
+
+                        elif event_type == "round_complete":
+                            yield f"data: {json.dumps({'type': 'round_complete', 'data': {'round_number': event.get('round_number')}})}\n\n"
+
+                        elif event_type == "moderator_start":
+                            # Can notify frontend that moderator is running
+                            yield f"data: {json.dumps({'type': 'moderator_start'})}\n\n"
+
+                        elif event_type == "moderator_complete":
+                            yield f"data: {json.dumps({'type': 'moderator_complete', 'data': event.get('moderator_summary')})}\n\n"
+
+                        elif event_type == "chair_start":
+                            yield f"data: {json.dumps({'type': 'chair_start'})}\n\n"
+
+                        elif event_type == "chair_complete":
+                            # Store run data for saving
+                            run_data = event.get("run")
+                            yield f"data: {json.dumps({'type': 'chair_complete', 'data': event.get('chair_final')})}\n\n"
+                            # Send roundtable_complete
+                            yield f"data: {json.dumps({'type': 'roundtable_complete'})}\n\n"
+
+                        elif event_type == "roundtable_aborted":
+                            run_data = event.get("run")
+                            aborted = True
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted'})}\n\n"
+
+                        else:
+                            # Forward unknown events as-is
+                            yield f"data: {json.dumps(event)}\n\n"
+
+                        await asyncio.sleep(0.01)
+                except asyncio.CancelledError:
+                    # Abort handled - run_data already captured from roundtable_aborted event
+                    aborted = True
+
+                # Handle title generation for first message
+                if title_task:
+                    try:
+                        title = await title_task
+                        storage.update_conversation_title(conversation_id, title)
+                        yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+                    except Exception as e:
+                        print(f"Error waiting for title task: {e}")
+
+                # Save roundtable run data and message to conversation
+                # Note: run_data is captured on both completion (chair_complete) and abort (roundtable_aborted)
+                if run_data:
+                    if aborted:
+                        print(f"Saving aborted roundtable run: {run_data.get('run_id')} (status: {run_data.get('status')})")
+                    # Persist full run data to data/runs/{conversation_id}/{run_id}.json
+                    storage.save_run(run_data)
+
+                    # Add slim reference to conversation
+                    storage.add_roundtable_message(
+                        conversation_id=conversation_id,
+                        run_id=run_data["run_id"],
+                        chair_final=run_data.get("chair_final", {}),
+                        metadata={
+                            "execution_mode": "roundtable",
+                            "num_rounds": num_rounds,
+                            "council_members": [a.model for a in agents],
+                            "moderator_model": moderator_model,
+                            "chair_model": chair_model,
+                            "search_context": search_context if search_context else None,
+                            "search_query": search_query if search_query else None,
+                        }
+                    )
+
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                return  # Exit early - roundtable flow is complete
+
+            # ========================================
+            # STANDARD MODE: 3-stage deliberation
+            # ========================================
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
@@ -949,4 +1076,4 @@ async def test_openrouter_api(request: TestOpenRouterRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8002)

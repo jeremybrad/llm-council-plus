@@ -9,7 +9,7 @@ const getApiBase = () => {
     return import.meta.env.VITE_API_URL;
   }
   const hostname = window.location.hostname;
-  return `http://${hostname}:8001`;
+  return `http://${hostname}:8002`;
 };
 
 const API_BASE = getApiBase();

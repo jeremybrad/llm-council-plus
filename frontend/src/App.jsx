@@ -278,12 +278,15 @@ function App() {
         stage1: null,
         stage2: null,
         stage3: null,
+        // Roundtable mode fields
+        roundtable: null,
         metadata: null,
         loading: {
           search: false,
           stage1: false,
           stage2: false,
           stage3: false,
+          roundtable: false,
         },
         timers: {
           stage1Start: null,
@@ -292,10 +295,13 @@ function App() {
           stage2End: null,
           stage3Start: null,
           stage3End: null,
+          roundtableStart: null,
+          roundtableEnd: null,
         },
         progress: {
           stage1: { count: 0, total: 0, currentModel: null },
-          stage2: { count: 0, total: 0, currentModel: null }
+          stage2: { count: 0, total: 0, currentModel: null },
+          roundtable: { currentRound: 0, totalRounds: 0, currentAgent: null }
         }
       };
 
@@ -607,6 +613,224 @@ function App() {
 
             case 'error':
               console.error('Stream error:', event.message);
+              setIsLoading(false);
+              break;
+
+            // ========================================
+            // ROUNDTABLE MODE EVENTS
+            // ========================================
+            case 'roundtable_start':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  loading: {
+                    ...lastMsg.loading,
+                    roundtable: true
+                  },
+                  timers: {
+                    ...lastMsg.timers,
+                    roundtableStart: Date.now()
+                  },
+                  progress: {
+                    ...lastMsg.progress,
+                    roundtable: {
+                      currentRound: 0,
+                      totalRounds: event.data?.num_rounds || 3,
+                      currentAgent: null
+                    }
+                  },
+                  roundtable: {
+                    rounds: [],
+                    moderator: null,
+                    chair_final: null,
+                    council_members: [],
+                    status: 'running'
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'round_start':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  progress: {
+                    ...lastMsg.progress,
+                    roundtable: {
+                      ...lastMsg.progress?.roundtable,
+                      currentRound: event.data?.round_number || 0,
+                      currentAgent: null
+                    }
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'agent_response':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                // Add or update round with new response
+                const roundNum = event.data?.round_number;
+                const response = event.data?.response;
+                const rounds = [...(lastMsg.roundtable?.rounds || [])];
+
+                // Ensure round array exists
+                while (rounds.length < roundNum) {
+                  rounds.push({ responses: [] });
+                }
+                if (!rounds[roundNum - 1]) {
+                  rounds[roundNum - 1] = { responses: [] };
+                }
+
+                // Add response to round
+                rounds[roundNum - 1].responses = [
+                  ...(rounds[roundNum - 1].responses || []),
+                  response
+                ];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  roundtable: {
+                    ...lastMsg.roundtable,
+                    rounds
+                  },
+                  progress: {
+                    ...lastMsg.progress,
+                    roundtable: {
+                      ...lastMsg.progress?.roundtable,
+                      currentAgent: response?.model
+                    }
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'round_complete':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  progress: {
+                    ...lastMsg.progress,
+                    roundtable: {
+                      ...lastMsg.progress?.roundtable,
+                      currentAgent: null
+                    }
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'moderator_complete':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  roundtable: {
+                    ...lastMsg.roundtable,
+                    moderator: event.data
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'chair_complete':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  roundtable: {
+                    ...lastMsg.roundtable,
+                    chair_final: event.data
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              break;
+
+            case 'roundtable_complete':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  loading: {
+                    ...lastMsg.loading,
+                    roundtable: false
+                  },
+                  timers: {
+                    ...lastMsg.timers,
+                    roundtableEnd: Date.now()
+                  },
+                  roundtable: {
+                    ...lastMsg.roundtable,
+                    status: 'completed'
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
+              setIsLoading(false);
+              break;
+
+            case 'roundtable_error':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+
+                const updatedLastMsg = {
+                  ...lastMsg,
+                  loading: {
+                    ...lastMsg.loading,
+                    roundtable: false
+                  },
+                  timers: {
+                    ...lastMsg.timers,
+                    roundtableEnd: Date.now()
+                  },
+                  roundtable: {
+                    ...lastMsg.roundtable,
+                    status: 'error',
+                    error: event.message
+                  }
+                };
+
+                messages[messages.length - 1] = updatedLastMsg;
+                return { ...prev, messages };
+              });
               setIsLoading(false);
               break;
 

@@ -560,3 +560,30 @@
   display: flex;
   justify-content: center;
 }
+
+/* Roundtable Loading State */
+.roundtable-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(6, 182, 212, 0.05));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 12px;
+  margin: 16px 0;
+}
+
+.roundtable-loading-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.roundtable-loading .round-progress {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.roundtable-loading .agent-progress {
+  color: var(--text-muted);
+  font-style: italic;
+}

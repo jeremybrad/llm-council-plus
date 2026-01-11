@@ -1,16 +1,32 @@
-"""JSON-based storage for conversations."""
+"""JSON-based storage for conversations and roundtable runs."""
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
 
+# Runs directory for roundtable mode - sibling to conversations
+RUNS_DIR = Path(DATA_DIR).parent / "runs"
+
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def ensure_runs_dir(conversation_id: str = None):
+    """Ensure the runs directory exists.
+
+    Args:
+        conversation_id: If provided, creates conversation-specific subdirectory
+    """
+    if conversation_id:
+        RUNS_DIR.joinpath(conversation_id).mkdir(parents=True, exist_ok=True)
+    else:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_conversation_path(conversation_id: str) -> str:
@@ -227,3 +243,141 @@ def delete_conversation(conversation_id: str) -> bool:
 
     os.remove(path)
     return True
+
+
+# =============================================================================
+# Roundtable Run Storage
+# =============================================================================
+
+def get_run_path(conversation_id: str, run_id: str) -> Path:
+    """Get the file path for a run.
+
+    Args:
+        conversation_id: Parent conversation ID
+        run_id: Run identifier
+
+    Returns:
+        Path to the run file
+    """
+    return RUNS_DIR / conversation_id / f"{run_id}.json"
+
+
+def save_run(run_data: Dict[str, Any]) -> None:
+    """Save a roundtable run to storage.
+
+    Uses atomic write (write to temp, fsync, rename) to prevent corruption.
+
+    Args:
+        run_data: Run data dict with 'run_id' and 'conversation_id' keys
+    """
+    conversation_id = run_data["conversation_id"]
+    run_id = run_data["run_id"]
+
+    ensure_runs_dir(conversation_id)
+
+    run_path = get_run_path(conversation_id, run_id)
+    run_dir = run_path.parent
+
+    # Atomic write: write to temp file, fsync, then rename
+    fd, tmp_path = tempfile.mkstemp(dir=run_dir, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(run_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Atomic rename
+        os.rename(tmp_path, run_path)
+    except Exception:
+        # Clean up temp file on error
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def get_run(conversation_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+    """Load a run from storage.
+
+    Args:
+        conversation_id: Parent conversation ID
+        run_id: Run identifier
+
+    Returns:
+        Run data dict or None if not found
+    """
+    run_path = get_run_path(conversation_id, run_id)
+
+    if not run_path.exists():
+        return None
+
+    with open(run_path, 'r') as f:
+        return json.load(f)
+
+
+def list_runs(conversation_id: str) -> List[Dict[str, Any]]:
+    """List all runs for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        List of run metadata dicts (run_id, status, created_at)
+    """
+    runs_path = RUNS_DIR / conversation_id
+
+    if not runs_path.exists():
+        return []
+
+    runs = []
+    for filename in runs_path.iterdir():
+        if filename.suffix == ".json":
+            try:
+                with open(filename, 'r') as f:
+                    data = json.load(f)
+                    runs.append({
+                        "run_id": data.get("run_id"),
+                        "status": data.get("status", "unknown"),
+                        "created_at": data.get("created_at"),
+                        "completed_at": data.get("completed_at"),
+                    })
+            except Exception:
+                continue
+
+    # Sort by creation time, newest first
+    runs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return runs
+
+
+def add_roundtable_message(
+    conversation_id: str,
+    run_id: str,
+    chair_final: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None
+):
+    """Add a roundtable assistant message to a conversation.
+
+    This creates a slim message in the conversation that references the run file.
+    The run file contains full round transcripts.
+
+    Args:
+        conversation_id: Conversation identifier
+        run_id: The roundtable run ID
+        chair_final: The chair's final synthesis
+        metadata: Optional metadata including council_members, num_rounds, etc.
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    message = {
+        "role": "assistant",
+        "execution_mode": "roundtable",
+        "run_id": run_id,
+        "chair_final": chair_final,
+    }
+
+    if metadata:
+        message["metadata"] = metadata
+
+    conversation["messages"].append(message)
+    save_conversation(conversation)

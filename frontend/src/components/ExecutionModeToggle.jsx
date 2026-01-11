@@ -4,7 +4,8 @@ export default function ExecutionModeToggle({ value, onChange, disabled }) {
     const modes = [
         { id: 'chat_only', label: 'Chat Only', icon: '💬' },
         { id: 'chat_ranking', label: 'Chat + Ranking', icon: '⚖️' },
-        { id: 'full', label: 'Full Deliberation', icon: '🏛️' }
+        { id: 'full', label: 'Full Deliberation', icon: '🏛️' },
+        { id: 'roundtable', label: 'Roundtable', icon: '🎯' }
     ];
 
     return (

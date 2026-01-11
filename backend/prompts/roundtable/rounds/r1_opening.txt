@@ -1,0 +1,22 @@
+ROUND 1 - Opening Statement
+Role: {AGENT_LABEL}
+
+Question:
+{QUESTION}
+
+Shared context:
+{CONTEXT}
+
+Constraints:
+{CONSTRAINTS}
+
+Instructions:
+- Produce your best initial answer from your role's perspective.
+- Be specific and concrete.
+- Include:
+  1) Key assumptions (max 5)
+  2) Proposed approach
+  3) Top risks / unknowns
+  4) What you would verify next
+
+Output in markdown.

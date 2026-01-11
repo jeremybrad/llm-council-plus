@@ -5,6 +5,7 @@ import SearchContext from './SearchContext';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import RoundtableTimeline from './RoundtableTimeline';
 import CouncilGrid from './CouncilGrid';
 import ExecutionModeToggle from './ExecutionModeToggle';
 import { api } from '../api';
@@ -198,6 +199,33 @@ export default function ChatInterface({
                                                 finalResponse={msg.stage3}
                                                 startTime={msg.timers?.stage3Start}
                                                 endTime={msg.timers?.stage3End}
+                                            />
+                                        )}
+
+                                        {/* Roundtable Mode */}
+                                        {msg.loading?.roundtable && (
+                                            <div className="roundtable-loading">
+                                                <div className="spinner"></div>
+                                                <span className="roundtable-loading-text">
+                                                    Roundtable in progress...
+                                                    {msg.progress?.roundtable?.currentRound > 0 && (
+                                                        <span className="round-progress">
+                                                            {' '}Round {msg.progress.roundtable.currentRound}/{msg.progress.roundtable.totalRounds}
+                                                        </span>
+                                                    )}
+                                                    {msg.progress?.roundtable?.currentAgent && (
+                                                        <span className="agent-progress">
+                                                            {' '}- {msg.progress.roundtable.currentAgent}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {msg.roundtable && (
+                                            <RoundtableTimeline
+                                                roundtable={msg.roundtable}
+                                                startTime={msg.timers?.roundtableStart}
+                                                endTime={msg.timers?.roundtableEnd}
                                             />
                                         )}
 

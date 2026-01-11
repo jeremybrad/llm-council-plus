@@ -1,0 +1,24 @@
+ROUND 3 - Revision
+Role: {AGENT_LABEL}
+
+You wrote in Round 1:
+{YOUR_ROUND1}
+
+Feedback from Round 2:
+{OTHER_MESSAGES}
+
+Instructions:
+- Revise your Round 1 proposal to address the best critiques.
+- Integrate any answered questions (if available).
+- Tighten: remove fluff, add missing specifics.
+- Provide:
+  1) Revised plan
+  2) Acceptance tests / verification steps
+  3) Remaining open questions (if any)
+
+Anti-mush check before finalizing:
+- If any sentence could apply to 100 unrelated projects, delete or specialize it.
+- Replace every "should/ensure/consider" with a concrete action or test.
+- Include at least one example (a file name, a JSON field, a prompt snippet, or a test command).
+
+Output in markdown with headings.

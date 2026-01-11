@@ -11,6 +11,9 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
 
+# Debug directory for prompt dumps
+DEBUG_PROMPTS_DIR = "data/debug/prompts"
+
 
 def get_openrouter_api_key() -> str:
     """Get OpenRouter API key from settings or environment."""
