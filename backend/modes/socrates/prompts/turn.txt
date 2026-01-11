@@ -1,0 +1,24 @@
+Turn {TURN_NUMBER} of {MAX_TURNS}
+
+INQUIRY
+{INQUIRY}
+
+CURRENT THESIS
+{THESIS}
+
+CURRENT LEDGER (active items only)
+{LEDGER_ACTIVE_VIEW}
+
+CONVERSATION HISTORY
+{CONVERSATION_HISTORY}
+
+THE INTERLOCUTOR'S RESPONSE
+{USER_MESSAGE}
+
+---
+
+Based on this response, ask your next question. Remember:
+- ONE question only
+- Update the ledger with any new commitments, definitions, or tensions from their response
+- Check if any stop criteria are now met
+- Output valid JSON only

@@ -1,0 +1,59 @@
+id: socrates
+display_name: "Socrates Mode"
+category: logic
+kind: interactive
+description: "Socratic questioning with commitment ledger. Converge toward clarity through structured inquiry."
+version: "0.1"
+
+protocol:
+  max_turns_default: 12
+  output_format: json
+  question_rate_target: 0.85
+  one_question_per_turn: true
+  stop_behavior: recommend  # recommend | auto | user_only
+
+roles:
+  - name: "Socrates"
+    purpose: "Questioner - asks one question per turn to clarify, challenge, or deepen"
+  - name: "Interlocutor"
+    purpose: "Human or agent responding to questions"
+
+inputs:
+  - type: chat_messages
+    required: true
+  - type: initial_inquiry
+    required: false
+    description: "Optional starting question/topic to investigate"
+
+outputs:
+  - ledger
+  - questions
+  - summary
+
+stop_criteria:
+  - "Clear definition agreed"
+  - "Testable thesis stated"
+  - "Productive aporia reached"
+  - "Commitment contradiction surfaced and acknowledged"
+  - "Max turns reached"
+
+question_types:
+  # Strict enum with one escape hatch
+  - definition      # "What do you mean by X?"
+  - assumption      # "What are you assuming when you say X?"
+  - evidence        # "What evidence supports X?"
+  - implication     # "If X is true, what follows?"
+  - counterexample  # "Can you think of a case where X doesn't hold?"
+  - viewpoint       # "How might someone who disagrees see this?"
+  - meta           # "What question should we be asking?"
+  - other          # Escape hatch - requires question_type_detail
+
+ui:
+  primary_view: "question_and_ledger"
+  panels:
+    - ledger
+    - glossary
+  actions:
+    - stop
+    - continue
+    - export

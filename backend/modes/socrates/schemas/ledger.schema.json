@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SocratesLedger",
+  "description": "Full ledger state for a Socrates session",
+  "type": "object",
+  "properties": {
+    "inquiry": {
+      "type": "string",
+      "description": "The central question being investigated"
+    },
+    "thesis": {
+      "type": "string",
+      "description": "Current working thesis (evolves through dialogue)"
+    },
+    "definitions": {
+      "type": "array",
+      "description": "Definitions proposed and refined during inquiry",
+      "items": {
+        "type": "object",
+        "required": ["id", "term", "definition", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "term": {"type": "string"},
+          "definition": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "turn": {"type": "integer"},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]},
+          "supersedes_id": {"type": "string"},
+          "superseded_by_id": {"type": "string"}
+        }
+      }
+    },
+    "commitments": {
+      "type": "array",
+      "description": "Explicit claims the interlocutor has committed to",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "source", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "source": {"type": "string", "enum": ["human", "agent"]},
+          "turn": {"type": "integer"},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Implicit assumptions surfaced during questioning",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "turn": {"type": "integer"},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+        }
+      }
+    },
+    "counterexamples": {
+      "type": "array",
+      "description": "Cases that challenge or refine the thesis",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "turn": {"type": "integer"},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+        }
+      }
+    },
+    "contradictions": {
+      "type": "array",
+      "description": "Tensions between commitments or definitions",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "item_ids", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "item_ids": {"type": "array", "items": {"type": "string"}},
+          "turns": {"type": "array", "items": {"type": "integer"}},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "description": "Questions that emerged but weren't fully addressed",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "turn": {"type": "integer"},
+          "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+        }
+      }
+    }
+  }
+}

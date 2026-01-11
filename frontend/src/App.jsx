@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import Settings from './components/Settings';
+import AnalyzeTab from './components/AnalyzeTab';
 import { api } from './api';
 import './App.css';
 
@@ -11,6 +12,7 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAnalyze, setShowAnalyze] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState('llm_keys');
   const [ollamaStatus, setOllamaStatus] = useState({
     connected: false,
@@ -898,6 +900,7 @@ function App() {
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenAnalyze={() => setShowAnalyze(true)}
         isLoading={isLoading}
         onAbort={handleAbort}
       />
@@ -921,6 +924,9 @@ function App() {
           onRefreshOllama={testOllamaConnection}
           initialSection={settingsInitialSection}
         />
+      )}
+      {showAnalyze && (
+        <AnalyzeTab onClose={() => setShowAnalyze(false)} />
       )}
     </div>
   );

@@ -1,0 +1,46 @@
+The Socratic inquiry has concluded after {TURN_COUNT} turns.
+
+INQUIRY
+{INQUIRY}
+
+FINAL LEDGER
+{LEDGER_FULL}
+
+CONVERSATION HISTORY
+{CONVERSATION_HISTORY}
+
+---
+
+Produce a summary of this inquiry. Output valid JSON:
+
+{
+  "summary_type": "clarity|aporia|partial",
+  "refined_thesis": "The clearest statement of where we landed (or null if aporia)",
+  "key_definitions": [
+    {"term": "...", "final_definition": "...", "confidence": 0.0}
+  ],
+  "key_commitments": [
+    {"text": "...", "status": "affirmed|retracted|contested"}
+  ],
+  "strongest_tension": {
+    "description": "The most significant unresolved tension or contradiction",
+    "why_it_matters": "..."
+  },
+  "productive_aporia": {
+    "present": false,
+    "description": "If aporia reached, what valuable confusion did we discover?"
+  },
+  "suggested_next_steps": [
+    "What evidence or experiment would resolve the tension?",
+    "What definition needs further refinement?",
+    "What assumption should be tested?"
+  ],
+  "meta_observations": [
+    "Any observations about how the dialogue unfolded"
+  ]
+}
+
+CRITICAL
+- Output ONLY valid JSON
+- Be honest about what was clarified vs what remains unclear
+- If we reached productive aporia, frame it as valuable, not as failure

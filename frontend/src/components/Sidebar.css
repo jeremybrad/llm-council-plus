@@ -91,6 +91,9 @@
 .sidebar-actions {
   padding: 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .new-council-btn {
@@ -121,6 +124,42 @@
 .new-council-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* Analyze Button */
+.analyze-btn {
+  width: 100%;
+  background: rgba(167, 139, 250, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+  padding: 12px 20px;
+  border-radius: 12px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.analyze-btn:hover:not(:disabled) {
+  background: rgba(167, 139, 250, 0.25);
+  border-color: rgba(167, 139, 250, 0.6);
+  box-shadow: 0 4px 12px rgba(167, 139, 250, 0.2);
+  transform: translateY(-1px);
+}
+
+.analyze-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.analyze-btn .btn-icon {
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .btn-icon {

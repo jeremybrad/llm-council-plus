@@ -1,0 +1,82 @@
+[
+  {
+    "id": "strawman",
+    "name": "Strawman",
+    "definition": "Misrepresenting an opponent’s argument (weaker version) and refuting that instead of the original.",
+    "why_it_weakens": "It doesn’t address the real claim, so disagreement remains unresolved.",
+    "how_to_fix": "Restate the strongest version of the other view (steelman) and confirm it before critiquing.",
+    "example": "‘So you’re saying we should never log anything’ (when the person argued for selective logging)."
+  },
+  {
+    "id": "red_herring",
+    "name": "Red Herring",
+    "definition": "Introducing an irrelevant point to distract from the issue under discussion.",
+    "why_it_weakens": "It shifts the debate away from the key claim, preventing resolution.",
+    "how_to_fix": "Name the tangent, park it, and return to the thesis question.",
+    "example": "During an API design debate, switching to argue about team morale without linking it to the decision."
+  },
+  {
+    "id": "ad_hominem",
+    "name": "Ad Hominem",
+    "definition": "Attacking the person (or their motives/traits) instead of the argument.",
+    "why_it_weakens": "Personal attacks don’t change the truth of premises or the validity of inferences.",
+    "how_to_fix": "Translate criticism into a claim about evidence, logic, or constraints.",
+    "example": "‘You always overcomplicate things’ instead of addressing the specific architectural tradeoff."
+  },
+  {
+    "id": "false_dilemma",
+    "name": "False Dilemma",
+    "definition": "Presenting only two options when more exist, or when a spectrum/combination is possible.",
+    "why_it_weakens": "It forces premature choices and hides better alternatives.",
+    "how_to_fix": "Ask for the missing options; consider hybrids and phased approaches.",
+    "example": "‘Either we ship now or we do it perfectly’ (ignoring incremental delivery)."
+  },
+  {
+    "id": "slippery_slope",
+    "name": "Slippery Slope",
+    "definition": "Claiming that one step will inevitably lead to extreme consequences without sufficient support.",
+    "why_it_weakens": "It substitutes fear of outcomes for evidence of causal links.",
+    "how_to_fix": "Identify the mechanism and probability at each step; propose guardrails.",
+    "example": "‘If we add one endpoint, soon we’ll have a microservices mess.’"
+  },
+  {
+    "id": "post_hoc",
+    "name": "Post Hoc",
+    "definition": "Assuming that because B followed A, A caused B.",
+    "why_it_weakens": "Temporal order isn’t causal evidence.",
+    "how_to_fix": "Look for confounders; propose an experiment or counterfactual check.",
+    "example": "‘We deployed and then latency rose, so the deploy caused it’ (ignoring traffic spike)."
+  },
+  {
+    "id": "circular_reasoning",
+    "name": "Circular Reasoning",
+    "definition": "The conclusion is assumed in the premises (the argument goes in a circle).",
+    "why_it_weakens": "It provides no independent support for the conclusion.",
+    "how_to_fix": "Add an external premise that could be true or false independently of the conclusion.",
+    "example": "‘This design is best because it’s the best option.’"
+  },
+  {
+    "id": "equivocation",
+    "name": "Equivocation",
+    "definition": "Using a key term in multiple senses within the same argument without noticing.",
+    "why_it_weakens": "The argument may appear valid while sliding between meanings.",
+    "how_to_fix": "Define the term; replace it with two distinct terms if meanings differ.",
+    "example": "Using ‘secure’ to mean ‘encrypted’ in one sentence and ‘authorized’ in the next."
+  },
+  {
+    "id": "hasty_generalization",
+    "name": "Hasty Generalization",
+    "definition": "Drawing a broad conclusion from too little or unrepresentative evidence.",
+    "why_it_weakens": "The conclusion may not hold outside the small sample.",
+    "how_to_fix": "Narrow the claim or gather more representative evidence.",
+    "example": "‘This approach failed once, so it never works.’"
+  },
+  {
+    "id": "appeal_to_authority",
+    "name": "Appeal to Authority",
+    "definition": "Claiming something is true primarily because an authority says so (especially outside their domain or without evidence).",
+    "why_it_weakens": "Authorities can be wrong; truth still depends on reasons/evidence.",
+    "how_to_fix": "Extract the underlying rationale; verify with evidence or tests.",
+    "example": "‘A famous engineer said microservices are best, so we should do it.’"
+  }
+]

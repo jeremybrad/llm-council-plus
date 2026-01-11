@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SocratesTurnOutput",
+  "description": "Output schema for a single Socrates turn",
+  "type": "object",
+  "required": ["next_question", "question_type", "why_this_question", "ledger_update", "stop_check"],
+  "properties": {
+    "next_question": {
+      "type": "string",
+      "description": "The single question Socrates asks this turn",
+      "minLength": 1
+    },
+    "question_type": {
+      "type": "string",
+      "enum": ["definition", "assumption", "evidence", "implication", "counterexample", "viewpoint", "meta", "other"],
+      "description": "Category of question being asked"
+    },
+    "question_type_detail": {
+      "type": "string",
+      "description": "Required explanation when question_type is 'other'"
+    },
+    "why_this_question": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "Brief reasons for asking this question"
+    },
+    "ledger_update": {
+      "$ref": "#/$defs/ledger_update"
+    },
+    "stop_check": {
+      "type": "object",
+      "required": ["done", "criteria"],
+      "properties": {
+        "done": {
+          "type": "boolean",
+          "description": "True if Socrates recommends stopping"
+        },
+        "criteria": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Which stop criteria are met"
+        },
+        "recommendation": {
+          "type": "string",
+          "description": "Optional explanation for stop recommendation"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ledger_update": {
+      "type": "object",
+      "properties": {
+        "inquiry": {"type": "string"},
+        "thesis": {"type": "string"},
+        "definitions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/definition_item"}
+        },
+        "commitments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/commitment_item"}
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/assumption_item"}
+        },
+        "counterexamples": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/counterexample_item"}
+        },
+        "contradictions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contradiction_item"}
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/open_question_item"}
+        }
+      }
+    },
+    "definition_item": {
+      "type": "object",
+      "required": ["id", "term", "definition", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^def_[a-z0-9]+$"},
+        "term": {"type": "string"},
+        "definition": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "turn": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]},
+        "supersedes_id": {"type": "string"},
+        "superseded_by_id": {"type": "string"}
+      }
+    },
+    "commitment_item": {
+      "type": "object",
+      "required": ["id", "text", "source", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^com_[a-z0-9]+$"},
+        "text": {"type": "string"},
+        "source": {"type": "string", "enum": ["human", "agent"]},
+        "turn": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+      }
+    },
+    "assumption_item": {
+      "type": "object",
+      "required": ["id", "text", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^asm_[a-z0-9]+$"},
+        "text": {"type": "string"},
+        "turn": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+      }
+    },
+    "counterexample_item": {
+      "type": "object",
+      "required": ["id", "text", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^cex_[a-z0-9]+$"},
+        "text": {"type": "string"},
+        "turn": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+      }
+    },
+    "contradiction_item": {
+      "type": "object",
+      "required": ["id", "text", "item_ids", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^con_[a-z0-9]+$"},
+        "text": {"type": "string"},
+        "item_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 2
+        },
+        "turns": {
+          "type": "array",
+          "items": {"type": "integer"}
+        },
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+      }
+    },
+    "open_question_item": {
+      "type": "object",
+      "required": ["id", "text", "status"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^opq_[a-z0-9]+$"},
+        "text": {"type": "string"},
+        "turn": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "enum": ["active", "superseded", "retracted"]}
+      }
+    }
+  }
+}

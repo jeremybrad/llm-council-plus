@@ -1,0 +1,232 @@
+/* AnalyzeTab.css - Entry point for Logic Modes */
+
+/* Overlay wrapper */
+.analyze-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.analyze-tab {
+  display: flex;
+  flex-direction: column;
+  width: 90%;
+  max-width: 1000px;
+  height: 85vh;
+  max-height: 850px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  color: #e2e8f0;
+  padding: 2rem;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Header */
+.analyze-header {
+  max-width: 800px;
+  margin: 0 auto 2rem auto;
+  text-align: center;
+}
+
+.analyze-header h2 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.analyze-header .description {
+  margin: 0 0 1rem 0;
+  color: #94a3b8;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.analyze-header .close-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #fca5a5;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.analyze-header .close-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+/* Modes grid */
+.modes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+/* Mode cards */
+.mode-card {
+  display: flex;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-card:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(59, 130, 246, 0.4);
+  transform: translateY(-2px);
+}
+
+/* Socrates mode styling */
+.mode-card.socrates {
+  border-left: 4px solid #a78bfa;
+}
+
+.mode-card.socrates:hover {
+  border-left-color: #c4b5fd;
+}
+
+.mode-card.socrates .mode-icon {
+  background: rgba(167, 139, 250, 0.2);
+  color: #c4b5fd;
+}
+
+/* Mode icon */
+.mode-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 10px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #93c5fd;
+  flex-shrink: 0;
+}
+
+/* Mode info */
+.mode-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mode-name {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.mode-description {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.mode-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mode-kind, .mode-category {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mode-kind {
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+}
+
+.mode-category {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+}
+
+/* States */
+.loading-state, .error-state, .empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+
+.loading-state {
+  color: #94a3b8;
+}
+
+.error-state p {
+  margin: 0 0 1rem 0;
+  color: #fca5a5;
+}
+
+.error-state button {
+  padding: 0.5rem 1rem;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 6px;
+  color: #93c5fd;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.error-state button:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.empty-state p {
+  color: #64748b;
+}
+
+/* Footer */
+.analyze-footer {
+  max-width: 800px;
+  margin: 2rem auto 0 auto;
+  text-align: center;
+}
+
+.analyze-footer .hint {
+  color: #64748b;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Scrollbar */
+.analyze-tab::-webkit-scrollbar {
+  width: 8px;
+}
+
+.analyze-tab::-webkit-scrollbar-track {
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 4px;
+}
+
+.analyze-tab::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+}
+
+.analyze-tab::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}

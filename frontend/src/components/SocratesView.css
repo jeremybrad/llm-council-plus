@@ -1,0 +1,558 @@
+/* SocratesView.css - Styles for Socratic dialogue mode */
+
+.socrates-view {
+  display: flex;
+  flex-direction: column;
+  width: 90%;
+  max-width: 1100px;
+  height: 85vh;
+  max-height: 900px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  color: #e2e8f0;
+  padding: 1.5rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.socrates-view.active {
+  padding: 0;
+}
+
+/* Header */
+.socrates-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.8);
+}
+
+.header-left h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.session-info {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.turn-count {
+  background: rgba(59, 130, 246, 0.2);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  color: #93c5fd;
+}
+
+.inquiry {
+  font-style: italic;
+  color: #cbd5e1;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.toggle-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(71, 85, 105, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.85rem;
+}
+
+.toggle-btn:hover {
+  background: rgba(71, 85, 105, 0.7);
+}
+
+.toggle-btn.active {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+}
+
+.close-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #fca5a5;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+/* Main content area */
+.socrates-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.conversation-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Messages container */
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+/* Message styling */
+.socrates-message {
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.socrates-message.user {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+  margin-left: 2rem;
+}
+
+.socrates-message.assistant {
+  margin-right: 2rem;
+}
+
+.socrates-message.summary {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(16, 185, 129, 0.15) 100%);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.socrates-message.loading {
+  opacity: 0.7;
+}
+
+.message-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.role-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
+.socrates-message.user .role-label {
+  color: #93c5fd;
+}
+
+.question-type {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.question-type.definition {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c4b5fd;
+}
+
+.question-type.assumption {
+  background: rgba(251, 146, 60, 0.2);
+  color: #fdba74;
+}
+
+.question-type.evidence {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+.question-type.implication {
+  background: rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+}
+
+.question-type.counterexample {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.question-type.viewpoint {
+  background: rgba(236, 72, 153, 0.2);
+  color: #f9a8d4;
+}
+
+.question-type.meta {
+  background: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+
+.message-content {
+  font-family: 'Merriweather', Georgia, serif;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #e2e8f0;
+}
+
+.message-content p {
+  margin: 0 0 0.75rem 0;
+}
+
+.message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.thinking-dots {
+  color: #94a3b8;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Observation */
+.observation {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.observation-label {
+  font-weight: 600;
+  margin-right: 0.5rem;
+  color: #cbd5e1;
+}
+
+/* Fallacy alert */
+.fallacy-alert {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.fallacy-alert:hover {
+  background: rgba(251, 146, 60, 0.25);
+}
+
+.alert-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(251, 146, 60, 0.4);
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fdba74;
+}
+
+.fallacy-name {
+  font-weight: 600;
+  color: #fdba74;
+}
+
+.fallacy-note {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #fcd34d;
+  opacity: 0.8;
+}
+
+/* Stop recommendation */
+.stop-recommendation {
+  margin: 1rem 1.5rem;
+  padding: 1rem 1.25rem;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 12px;
+}
+
+.stop-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 500;
+  color: #7dd3fc;
+  margin-bottom: 0.75rem;
+}
+
+.stop-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(56, 189, 248, 0.3);
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.stop-criteria {
+  margin: 0 0 1rem 0;
+  padding-left: 1.5rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.stop-criteria li {
+  margin-bottom: 0.25rem;
+}
+
+.stop-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.stop-btn, .continue-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.stop-btn {
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #86efac;
+}
+
+.stop-btn:hover {
+  background: rgba(34, 197, 94, 0.3);
+}
+
+.continue-btn {
+  background: rgba(71, 85, 105, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+}
+
+.continue-btn:hover {
+  background: rgba(71, 85, 105, 0.7);
+}
+
+/* Input area */
+.input-area {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  background: rgba(15, 23, 42, 0.8);
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.input-area textarea {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-family: 'Merriweather', Georgia, serif;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  resize: none;
+  transition: border-color 0.2s;
+}
+
+.input-area textarea:focus {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.input-area textarea::placeholder {
+  color: #64748b;
+}
+
+.send-btn {
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.send-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Session completed */
+.session-completed {
+  text-align: center;
+  padding: 1.5rem;
+  background: rgba(15, 23, 42, 0.8);
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.session-completed p {
+  margin: 0 0 1rem 0;
+  color: #94a3b8;
+}
+
+.new-session-btn {
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.new-session-btn:hover {
+  opacity: 0.9;
+}
+
+/* Start screen */
+.socrates-start {
+  max-width: 600px;
+  margin: 2rem auto;
+  text-align: center;
+}
+
+.description {
+  color: #94a3b8;
+  font-size: 1rem;
+  line-height: 1.6;
+  margin-bottom: 2rem;
+}
+
+.start-options {
+  margin-bottom: 2rem;
+}
+
+.start-btn {
+  padding: 1rem 2rem;
+  font-size: 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.start-btn.primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  border: none;
+  color: white;
+  font-weight: 500;
+}
+
+.start-btn.primary:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-2px);
+}
+
+.start-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.start-hint {
+  text-align: left;
+  padding: 1.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.start-hint p {
+  margin: 0 0 1rem 0;
+  color: #cbd5e1;
+}
+
+.start-hint ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  color: #94a3b8;
+}
+
+.start-hint li {
+  margin-bottom: 0.5rem;
+}
+
+/* Error banner */
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  margin: 1rem;
+  color: #fca5a5;
+  font-size: 0.9rem;
+}
+
+.error-banner button {
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 4px;
+  color: #fca5a5;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.error-banner button:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* Scrollbar styling */
+.messages-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messages-container::-webkit-scrollbar-track {
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 4px;
+}
+
+.messages-container::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+}
+
+.messages-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}

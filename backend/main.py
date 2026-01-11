@@ -15,8 +15,24 @@ from .council import generate_conversation_title, generate_search_query, stage1_
 from .search import perform_web_search, SearchProvider
 from .settings import get_settings, update_settings, Settings, DEFAULT_COUNCIL_MODELS, DEFAULT_CHAIRMAN_MODEL, AVAILABLE_MODELS
 from .roundtable import run_roundtable, get_default_council, AgentConfig
+from .modes import get_mode_runner, ModeRunner
+from .modes.socrates_runner import SocratesRunner
+from .modes.json_recovery import recover_socrates_turn
+from pathlib import Path
 
 app = FastAPI(title="LLM Council Plus API")
+
+# Initialize mode runner with persist directory
+MODE_SESSIONS_DIR = Path(__file__).parent.parent / "data" / "mode_sessions"
+_mode_runner: ModeRunner | None = None
+
+def get_runner() -> ModeRunner:
+    """Get or create the ModeRunner instance."""
+    global _mode_runner
+    if _mode_runner is None:
+        _mode_runner = ModeRunner()
+        _mode_runner.session_store.persist_dir = MODE_SESSIONS_DIR
+    return _mode_runner
 
 # Enable CORS for local development and network access
 # Allow requests from any hostname on ports 517x (Vite), 3000 (CRA), 8080 (common dev)
@@ -1048,7 +1064,7 @@ async def test_openrouter_api(request: TestOpenRouterRequest):
 
     # Use provided key or fall back to saved key
     api_key = request.api_key if request.api_key else get_openrouter_api_key()
-    
+
     if not api_key:
         return {"success": False, "message": "No API key provided or configured"}
 
@@ -1072,6 +1088,305 @@ async def test_openrouter_api(request: TestOpenRouterRequest):
         return {"success": False, "message": "Request timed out"}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+# ========================================
+# MODE ENGINE API ENDPOINTS
+# ========================================
+
+class CreateModeSessionRequest(BaseModel):
+    """Request to create a new mode session."""
+    mode_id: str
+    initial_inquiry: Optional[str] = None
+    model: Optional[str] = None
+    max_turns: Optional[int] = None
+
+
+class ModeTurnRequest(BaseModel):
+    """Request to run a mode turn."""
+    session_id: str
+    user_message: str
+
+
+class ModeSummaryRequest(BaseModel):
+    """Request to generate a mode summary."""
+    session_id: str
+
+
+@app.get("/api/modes")
+async def list_modes():
+    """List all available modes."""
+    runner = get_runner()
+    modes = await runner.get_all_modes()
+    return {"modes": [m.to_dict() for m in modes]}
+
+
+@app.get("/api/modes/{mode_id}")
+async def get_mode(mode_id: str):
+    """Get details for a specific mode."""
+    runner = get_runner()
+    try:
+        mode = await runner.get_mode(mode_id)
+        return mode.to_dict()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Mode not found: {mode_id}")
+
+
+@app.post("/api/modes/sessions")
+async def create_mode_session(request: CreateModeSessionRequest):
+    """Create a new mode session."""
+    runner = get_runner()
+
+    # Verify mode exists
+    try:
+        mode = await runner.get_mode(request.mode_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Mode not found: {request.mode_id}")
+
+    # Use mode's default max_turns if not specified
+    max_turns = request.max_turns or mode.protocol.get("max_turns_default", 12)
+
+    session = await runner.create_session(
+        mode_id=request.mode_id,
+        initial_inquiry=request.initial_inquiry,
+        model=request.model,
+    )
+    session.max_turns = max_turns
+
+    return session.to_dict()
+
+
+@app.get("/api/modes/sessions/{session_id}")
+async def get_mode_session(session_id: str):
+    """Get the current state of a mode session."""
+    runner = get_runner()
+    session = await runner.get_session(session_id)
+
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Include active ledger view
+    active_view = runner.get_active_ledger_view(session.ledger)
+
+    result = session.to_dict()
+    result["ledger_active_view"] = active_view
+    return result
+
+
+@app.post("/api/modes/{mode_id}/turn")
+async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
+    """Run a turn in a mode session.
+
+    Generic endpoint that works with any interactive mode.
+    """
+    from .council import query_model
+
+    runner = get_runner()
+    session = await runner.get_session(request.session_id)
+
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.mode_id != mode_id:
+        raise HTTPException(status_code=400, detail=f"Session is for mode '{session.mode_id}', not '{mode_id}'")
+
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail=f"Session is not active (status: {session.status})")
+
+    # Get mode-specific runner
+    if mode_id == "socrates":
+        socrates_runner = SocratesRunner(runner.modes_dir)
+
+        # Build messages for LLM
+        messages = socrates_runner.build_messages_for_llm(session, request.user_message)
+
+        # Add user message to session history
+        session.messages.append({"role": "user", "content": request.user_message})
+
+        # Get model to use
+        model = session.model
+        if not model:
+            settings = get_settings()
+            model = settings.chairman_model  # Use chairman model as default for Socrates
+
+        # Query the model
+        start_time = asyncio.get_event_loop().time()
+        try:
+            response = await query_model(
+                model=model,
+                messages=messages,
+                timeout=120.0,
+                temperature=0.7
+            )
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Model query failed: {str(e)}")
+
+        if response.get("error"):
+            raise HTTPException(status_code=500, detail=f"Model error: {response.get('content', 'Unknown error')}")
+
+        raw_response = response.get("content", "")
+
+        # Process the response with 3-pass JSON recovery
+        result = socrates_runner.process_turn_response(raw_response, session)
+        output = result["output"]
+
+        # Add assistant response to session history
+        session.messages.append({"role": "assistant", "content": raw_response})
+
+        # Merge ledger update
+        if output.get("ledger_update"):
+            session.ledger = runner.merge_ledger(session.ledger, output["ledger_update"])
+
+        # Check stop conditions
+        stop_recommended = socrates_runner.should_recommend_stop(output, session)
+        criteria_met = socrates_runner.get_stop_criteria_met(output, session)
+
+        # Create turn receipt
+        turn_receipt = {
+            "turn": session.turn_count + 1,
+            "model": model,
+            "duration_ms": duration_ms,
+            "parse_success": result["success"],
+            "parse_error": result.get("error"),
+            "stop_recommended": stop_recommended,
+            "criteria_met": criteria_met
+        }
+
+        # Update session
+        runner.session_store.update_session(
+            session_id=session.session_id,
+            ledger=session.ledger,
+            messages=session.messages,
+            turn_receipt=turn_receipt,
+            stop_recommended=stop_recommended,
+            stop_criteria_met=criteria_met
+        )
+
+        # Build response
+        return {
+            "success": result["success"],
+            "turn": session.turn_count,
+            "output": {
+                "next_question": output.get("next_question"),
+                "question_type": output.get("question_type"),
+                "question_type_detail": output.get("question_type_detail"),
+                "why_this_question": output.get("why_this_question"),
+                "stop_check": output.get("stop_check")
+            },
+            "ledger_active_view": runner.get_active_ledger_view(session.ledger),
+            "stop_recommended": stop_recommended,
+            "criteria_met": criteria_met,
+            "parse_error": result.get("error"),
+            "session_status": session.status,
+            "turns_remaining": session.max_turns - session.turn_count
+        }
+    else:
+        raise HTTPException(status_code=400, detail=f"Mode '{mode_id}' does not support interactive turns")
+
+
+@app.post("/api/modes/{mode_id}/stop")
+async def stop_mode_session(mode_id: str, request: ModeSummaryRequest):
+    """Stop a mode session and generate summary."""
+    from .council import query_model
+
+    runner = get_runner()
+    session = await runner.get_session(request.session_id)
+
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.mode_id != mode_id:
+        raise HTTPException(status_code=400, detail=f"Session is for mode '{session.mode_id}', not '{mode_id}'")
+
+    if mode_id == "socrates":
+        socrates_runner = SocratesRunner(runner.modes_dir)
+
+        # Build summary prompt
+        summary_prompt = socrates_runner.build_summary_prompt(session)
+
+        # Get model
+        model = session.model
+        if not model:
+            settings = get_settings()
+            model = settings.chairman_model
+
+        # Query for summary
+        messages = [
+            {"role": "system", "content": socrates_runner.system_prompt},
+            {"role": "user", "content": summary_prompt}
+        ]
+
+        try:
+            response = await query_model(
+                model=model,
+                messages=messages,
+                timeout=120.0,
+                temperature=0.5
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+        raw_summary = response.get("content", "")
+
+        # Parse summary (also uses JSON recovery)
+        from .modes.json_recovery import parse_json
+        parsed_summary, error = parse_json(raw_summary)
+
+        # Mark session as completed
+        runner.session_store.complete_session(session.session_id)
+
+        return {
+            "session_id": session.session_id,
+            "status": "completed",
+            "turn_count": session.turn_count,
+            "summary": parsed_summary or {"raw": raw_summary},
+            "parse_error": error,
+            "final_ledger": session.ledger,
+            "final_ledger_active_view": runner.get_active_ledger_view(session.ledger)
+        }
+    else:
+        raise HTTPException(status_code=400, detail=f"Mode '{mode_id}' does not support stop summary")
+
+
+@app.delete("/api/modes/sessions/{session_id}")
+async def delete_mode_session(session_id: str):
+    """Delete a mode session."""
+    runner = get_runner()
+    deleted = runner.session_store.delete_session(session_id)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {"status": "deleted"}
+
+
+@app.get("/api/glossary")
+async def get_glossary():
+    """Get the fallacies glossary."""
+    glossary_path = Path(__file__).parent / "resources" / "fallacies_glossary.json"
+
+    if not glossary_path.exists():
+        raise HTTPException(status_code=404, detail="Glossary not found")
+
+    return json.loads(glossary_path.read_text())
+
+
+@app.get("/api/glossary/{fallacy_id}")
+async def get_fallacy(fallacy_id: str):
+    """Get a specific fallacy from the glossary."""
+    glossary_path = Path(__file__).parent / "resources" / "fallacies_glossary.json"
+
+    if not glossary_path.exists():
+        raise HTTPException(status_code=404, detail="Glossary not found")
+
+    glossary = json.loads(glossary_path.read_text())
+
+    for fallacy in glossary:
+        if fallacy.get("id") == fallacy_id:
+            return fallacy
+
+    raise HTTPException(status_code=404, detail=f"Fallacy not found: {fallacy_id}")
 
 
 if __name__ == "__main__":

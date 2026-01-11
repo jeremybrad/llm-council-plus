@@ -290,6 +290,111 @@ export const api = {
    * @param {AbortSignal} signal - Optional AbortSignal to cancel the request
    * @returns {Promise<void>}
    */
+  // ========================================
+  // MODE ENGINE API
+  // ========================================
+
+  /**
+   * List all available modes.
+   */
+  async listModes() {
+    const response = await fetch(`${API_BASE}/api/modes`);
+    if (!response.ok) {
+      throw new Error('Failed to list modes');
+    }
+    return response.json();
+  },
+
+  /**
+   * Create a new mode session.
+   */
+  async createModeSession(modeId, initialInquiry = null, model = null) {
+    const response = await fetch(`${API_BASE}/api/modes/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode_id: modeId,
+        initial_inquiry: initialInquiry,
+        model: model,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to create mode session');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get a mode session by ID.
+   */
+  async getModeSession(sessionId) {
+    const response = await fetch(`${API_BASE}/api/modes/sessions/${sessionId}`);
+    if (!response.ok) {
+      throw new Error('Failed to get mode session');
+    }
+    return response.json();
+  },
+
+  /**
+   * Execute a turn in a mode session.
+   */
+  async modeTurn(modeId, sessionId, userMessage, model = null) {
+    const response = await fetch(`${API_BASE}/api/modes/${modeId}/turn`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_message: userMessage,
+        model: model,
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || 'Failed to execute mode turn');
+    }
+    return response.json();
+  },
+
+  /**
+   * Stop a mode session and get summary.
+   */
+  async stopModeSession(modeId, sessionId, model = null) {
+    const response = await fetch(`${API_BASE}/api/modes/${modeId}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        model: model,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to stop mode session');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get fallacies glossary.
+   */
+  async getGlossary() {
+    const response = await fetch(`${API_BASE}/api/glossary`);
+    if (!response.ok) {
+      throw new Error('Failed to get glossary');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get a specific fallacy by ID.
+   */
+  async getFallacy(fallacyId) {
+    const response = await fetch(`${API_BASE}/api/glossary/${fallacyId}`);
+    if (!response.ok) {
+      throw new Error('Failed to get fallacy');
+    }
+    return response.json();
+  },
+
   async sendMessageStream(conversationId, options, onEvent, signal) {
     const { content, webSearch = false, executionMode = 'full' } = options;
     const response = await fetch(

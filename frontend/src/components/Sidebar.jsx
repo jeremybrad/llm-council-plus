@@ -8,6 +8,7 @@ export default function Sidebar({
   onNewConversation,
   onDeleteConversation,
   onOpenSettings,
+  onOpenAnalyze,
   isLoading,
   onAbort
 }) {
@@ -59,6 +60,15 @@ export default function Sidebar({
         >
           <span className="btn-icon">+</span>
           <span className="btn-text">New Discussion</span>
+        </button>
+        <button
+          className="analyze-btn"
+          onClick={onOpenAnalyze}
+          disabled={isLoading}
+          title="Open Analyze Mode"
+        >
+          <span className="btn-icon">?</span>
+          <span className="btn-text">Analyze</span>
         </button>
       </div>
 

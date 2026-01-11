@@ -1,0 +1,271 @@
+/* LedgerPanel.css - Styles for the Socratic commitment ledger */
+
+.ledger-panel {
+  width: 320px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.95);
+  border-left: 1px solid rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(30, 41, 59, 0.5);
+}
+
+.panel-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.panel-header .close-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.panel-header .close-btn:hover {
+  background: rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+}
+
+.ledger-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+/* Meta section (inquiry & thesis) */
+.ledger-meta {
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0.75rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+}
+
+.meta-item {
+  margin-bottom: 0.75rem;
+}
+
+.meta-item:last-child {
+  margin-bottom: 0;
+}
+
+.meta-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #93c5fd;
+  margin-bottom: 0.25rem;
+}
+
+.meta-value {
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+}
+
+/* Section styling */
+.ledger-section {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.ledger-section:last-child {
+  border-bottom: none;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.section-header:hover {
+  background: rgba(71, 85, 105, 0.3);
+}
+
+.section-title {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.section-count {
+  font-size: 0.7rem;
+  color: #64748b;
+  margin-right: 0.5rem;
+}
+
+.expand-icon {
+  width: 18px;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.section-content {
+  padding: 0 0.5rem 0.5rem 0.5rem;
+}
+
+/* Ledger items */
+.ledger-item {
+  padding: 0.6rem 0.75rem;
+  margin: 0.25rem 0;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  border-left: 3px solid rgba(148, 163, 184, 0.3);
+  transition: all 0.2s;
+}
+
+.ledger-item:hover {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.ledger-item.active {
+  border-left-color: #3b82f6;
+}
+
+.ledger-item.superseded {
+  opacity: 0.6;
+  border-left-color: #f59e0b;
+}
+
+.ledger-item.retracted {
+  opacity: 0.5;
+  border-left-color: #ef4444;
+  text-decoration: line-through;
+}
+
+.item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.item-id {
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.2);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.item-term {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+}
+
+.item-source {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.confidence {
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.challenges, .between {
+  font-size: 0.65rem;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.item-body {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.superseded-by {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.65rem;
+  color: #fbbf24;
+}
+
+/* Grouped items */
+.superseded-group, .retracted-group {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
+.group-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+  padding-left: 0.5rem;
+}
+
+/* Empty state */
+.empty-state {
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.empty-state p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* Scrollbar */
+.ledger-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ledger-content::-webkit-scrollbar-track {
+  background: rgba(30, 41, 59, 0.3);
+}
+
+.ledger-content::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 3px;
+}
+
+.ledger-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
