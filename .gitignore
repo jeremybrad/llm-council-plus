@@ -30,3 +30,4 @@ frontend/.vite/
 .DS_Store
 BUGS_AND_OPTIMIZATIONS.md
 DESIGN_SESSION_CONTEXT.md
+reports/
