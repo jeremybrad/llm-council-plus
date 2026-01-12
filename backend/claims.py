@@ -708,3 +708,112 @@ def clear_all_claims() -> int:
     count = len(claims)
     _save_claims({})
     return count
+
+
+def import_claim(
+    claim_data: Dict[str, Any],
+    on_duplicate: str = "skip",
+) -> tuple[Optional[Claim], str]:
+    """Import a claim from export data.
+
+    Args:
+        claim_data: Dictionary with claim fields (from export bundle)
+        on_duplicate: Strategy for existing claim_id: "skip", "overwrite", or "error"
+
+    Returns:
+        Tuple of (Claim or None, status) where status is:
+        - "created": New claim was created
+        - "skipped": Existing claim was skipped (on_duplicate="skip")
+        - "overwritten": Existing claim was replaced (on_duplicate="overwrite")
+        - "error": Duplicate found and on_duplicate="error"
+
+    Raises:
+        ValueError: If on_duplicate="error" and claim already exists
+    """
+    claims = _load_claims()
+    claim_id = claim_data["claim_id"]
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Check for duplicate
+    if claim_id in claims:
+        if on_duplicate == "skip":
+            return claims[claim_id], "skipped"
+        elif on_duplicate == "error":
+            raise ValueError(f"Claim {claim_id} already exists")
+        # on_duplicate == "overwrite" continues below
+
+    # Build Evidence objects
+    evidence_list = []
+    for ev_data in claim_data.get("evidence", []):
+        evidence_list.append(Evidence(
+            evidence_id=ev_data["evidence_id"],
+            source_type=ev_data["source_type"],
+            source_id=ev_data["source_id"],
+            quote=ev_data["quote"],
+            support=ev_data["support"],
+            weight=ev_data["weight"],
+            retrieved_at=ev_data.get("retrieved_at", now),
+            retrieval_query=ev_data.get("retrieval_query", "import"),
+            span_start=ev_data.get("span_start"),
+            span_end=ev_data.get("span_end"),
+            source_hash=ev_data.get("source_hash"),
+        ))
+
+    # Build ScoreBreakdown if present
+    score_breakdown = None
+    if claim_data.get("score_breakdown"):
+        sb = claim_data["score_breakdown"]
+        score_breakdown = ScoreBreakdown(
+            base_score=sb.get("base_score", 0.0),
+            supporting_bonus=sb.get("supporting_bonus", 0.0),
+            independence_bonus=sb.get("independence_bonus", 0.0),
+            contradiction_penalty=sb.get("contradiction_penalty", 0.0),
+            final_score=sb.get("final_score", 0.0),
+            evidence_ids_used=sb.get("evidence_ids_used", []),
+            calculation_timestamp=sb.get("calculation_timestamp", now),
+            cap_applied=sb.get("cap_applied", 0.98),
+            cap_reason=sb.get("cap_reason", "imported"),
+        )
+
+    # Build review history with import event
+    review_history = claim_data.get("review_history", [])
+    import_event = {
+        "event": "imported",
+        "timestamp": now,
+        "source": "api_import",
+        "original_created_at": claim_data.get("created_at"),
+    }
+
+    # Create Claim object
+    # Use `or now` to handle both missing keys and explicit None values
+    claim = Claim(
+        claim_id=claim_id,
+        claim_text=claim_data["claim_text"],
+        claim_type=claim_data["claim_type"],
+        confidence=claim_data.get("confidence") or 0.3,
+        status=claim_data.get("status") or "candidate",
+        evidence=evidence_list,
+        as_of=claim_data.get("as_of"),
+        valid_from=claim_data.get("valid_from"),
+        valid_until=claim_data.get("valid_until"),
+        score_breakdown=score_breakdown,
+        created_at=claim_data.get("created_at") or now,
+        last_reviewed_at=claim_data.get("last_reviewed_at"),
+        review_history=review_history + [import_event],
+    )
+
+    # Determine status
+    status = "overwritten" if claim_id in claims else "created"
+
+    # Save
+    claims[claim_id] = claim
+    _save_claims(claims)
+
+    _log_to_history({
+        "event": "claim_imported",
+        "timestamp": now,
+        "claim_id": claim_id,
+        "status": status,
+    })
+
+    return claim, status

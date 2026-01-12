@@ -1303,3 +1303,266 @@ class TestExportClaims:
         from datetime import datetime
         exported_at = data["metadata"]["exported_at"]
         datetime.fromisoformat(exported_at.replace("Z", "+00:00"))
+
+
+# =============================================================================
+# POST /api/claims/import - Import Claims Bundle
+# =============================================================================
+
+
+class TestImportClaims:
+    """Tests for POST /api/claims/import endpoint."""
+
+    def test_import_empty_bundle(self, client):
+        """Import with no claims returns success with zero counts."""
+        response = client.post("/api/claims/import", json={"claims": []})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_in_bundle"] == 0
+        assert data["created"] == 0
+        assert data["skipped"] == 0
+        assert data["errors"] == 0
+
+    def test_import_single_claim(self, client):
+        """Import creates new claim with specified ID."""
+        claim_data = {
+            "claim_id": "import-test-001",
+            "claim_text": "Imported claim text",
+            "claim_type": "preference",
+            "confidence": 0.75,
+            "status": "accepted",
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["created"] == 1
+        assert data["results"][0]["status"] == "created"
+
+        # Verify claim exists with correct data
+        get_response = client.get("/api/claims/import-test-001")
+        assert get_response.status_code == 200
+        claim = get_response.json()
+        assert claim["claim_text"] == "Imported claim text"
+        assert claim["confidence"] == 0.75
+        assert claim["status"] == "accepted"
+
+    def test_import_with_evidence(self, client):
+        """Import preserves evidence array."""
+        claim_data = {
+            "claim_id": "import-test-002",
+            "claim_text": "Claim with evidence",
+            "claim_type": "biographical",
+            "evidence": [
+                {
+                    "evidence_id": "ev-import-001",
+                    "source_type": "transcript",
+                    "source_id": "conv_123",
+                    "quote": "Original evidence quote",
+                    "support": "supports",
+                    "weight": 0.8,
+                }
+            ],
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 200
+        assert response.json()["created"] == 1
+
+        # Verify evidence was imported
+        get_response = client.get("/api/claims/import-test-002?include_evidence=true")
+        claim = get_response.json()
+        assert len(claim["evidence"]) == 1
+        assert claim["evidence"][0]["evidence_id"] == "ev-import-001"
+        assert claim["evidence"][0]["quote"] == "Original evidence quote"
+
+    def test_import_with_review_history(self, client):
+        """Import preserves review history and appends import event."""
+        original_history = [
+            {"event": "claim_created", "timestamp": "2026-01-01T00:00:00Z"},
+            {"event": "evidence_added", "timestamp": "2026-01-02T00:00:00Z"},
+        ]
+
+        claim_data = {
+            "claim_id": "import-test-003",
+            "claim_text": "Claim with history",
+            "claim_type": "event",
+            "review_history": original_history,
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 200
+
+        # Verify history was preserved and import event added
+        get_response = client.get("/api/claims/import-test-003?include_history=true")
+        claim = get_response.json()
+        assert len(claim["review_history"]) == 3  # original 2 + import event
+        assert claim["review_history"][-1]["event"] == "imported"
+
+    def test_import_duplicate_skip(self, client, sample_claim):
+        """on_duplicate=skip keeps existing claim."""
+        original_text = sample_claim.claim_text
+
+        claim_data = {
+            "claim_id": sample_claim.claim_id,
+            "claim_text": "New text that should not replace original",
+            "claim_type": "preference",
+        }
+
+        response = client.post(
+            "/api/claims/import",
+            json={"claims": [claim_data], "on_duplicate": "skip"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["skipped"] == 1
+        assert data["results"][0]["status"] == "skipped"
+
+        # Verify original claim unchanged
+        get_response = client.get(f"/api/claims/{sample_claim.claim_id}")
+        assert get_response.json()["claim_text"] == original_text
+
+    def test_import_duplicate_overwrite(self, client, sample_claim):
+        """on_duplicate=overwrite replaces existing claim."""
+        claim_data = {
+            "claim_id": sample_claim.claim_id,
+            "claim_text": "Overwritten claim text",
+            "claim_type": "preference",
+            "confidence": 0.9,
+        }
+
+        response = client.post(
+            "/api/claims/import",
+            json={"claims": [claim_data], "on_duplicate": "overwrite"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["overwritten"] == 1
+        assert data["results"][0]["status"] == "overwritten"
+
+        # Verify claim was replaced
+        get_response = client.get(f"/api/claims/{sample_claim.claim_id}")
+        assert get_response.json()["claim_text"] == "Overwritten claim text"
+        assert get_response.json()["confidence"] == 0.9
+
+    def test_import_duplicate_error(self, client, sample_claim):
+        """on_duplicate=error returns error for existing claim."""
+        claim_data = {
+            "claim_id": sample_claim.claim_id,
+            "claim_text": "Should cause error",
+            "claim_type": "preference",
+        }
+
+        response = client.post(
+            "/api/claims/import",
+            json={"claims": [claim_data], "on_duplicate": "error"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["errors"] == 1
+        assert data["results"][0]["status"] == "error"
+        assert "already exists" in data["results"][0]["error"]
+
+    def test_import_multiple_claims(self, client):
+        """Import handles multiple claims correctly."""
+        claims_data = [
+            {"claim_id": f"multi-import-{i}", "claim_text": f"Claim {i}", "claim_type": "biographical"}
+            for i in range(5)
+        ]
+
+        response = client.post("/api/claims/import", json={"claims": claims_data})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_in_bundle"] == 5
+        assert data["created"] == 5
+        assert len(data["results"]) == 5
+
+    def test_import_mixed_results(self, client, sample_claim):
+        """Import with mix of new and existing claims."""
+        claims_data = [
+            {"claim_id": "new-claim-001", "claim_text": "New claim", "claim_type": "preference"},
+            {"claim_id": sample_claim.claim_id, "claim_text": "Duplicate", "claim_type": "preference"},
+            {"claim_id": "new-claim-002", "claim_text": "Another new", "claim_type": "biographical"},
+        ]
+
+        response = client.post(
+            "/api/claims/import",
+            json={"claims": claims_data, "on_duplicate": "skip"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_in_bundle"] == 3
+        assert data["created"] == 2
+        assert data["skipped"] == 1
+
+    def test_import_invalid_claim_type(self, client):
+        """Import rejects invalid claim type."""
+        claim_data = {
+            "claim_id": "invalid-type-001",
+            "claim_text": "Test",
+            "claim_type": "invalid_type",
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 422
+
+    def test_import_invalid_status(self, client):
+        """Import rejects invalid status."""
+        claim_data = {
+            "claim_id": "invalid-status-001",
+            "claim_text": "Test",
+            "claim_type": "preference",
+            "status": "invalid_status",
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 422
+
+    def test_import_preserves_temporal_fields(self, client):
+        """Import preserves temporal validity fields."""
+        claim_data = {
+            "claim_id": "temporal-import-001",
+            "claim_text": "Time-bound claim",
+            "claim_type": "event",
+            "as_of": "2026-01-01T00:00:00Z",
+            "valid_from": "2020-01-01T00:00:00Z",
+            "valid_until": "2025-12-31T00:00:00Z",
+        }
+
+        response = client.post("/api/claims/import", json={"claims": [claim_data]})
+        assert response.status_code == 200
+
+        get_response = client.get("/api/claims/temporal-import-001")
+        claim = get_response.json()
+        assert claim["valid_from"] == "2020-01-01T00:00:00Z"
+        assert claim["valid_until"] == "2025-12-31T00:00:00Z"
+
+    def test_roundtrip_export_import(self, client, sample_claim_with_evidence):
+        """Export then import produces equivalent data."""
+        # Export
+        export_response = client.get("/api/claims/export")
+        assert export_response.status_code == 200
+        export_data = export_response.json()
+
+        # Clear all claims
+        from backend.claims import clear_all_claims
+        clear_all_claims()
+
+        # Verify empty
+        list_response = client.get("/api/claims")
+        assert list_response.json()["total"] == 0
+
+        # Import the exported data
+        import_response = client.post(
+            "/api/claims/import",
+            json={"claims": export_data["claims"]},
+        )
+        assert import_response.status_code == 200
+        assert import_response.json()["created"] == 1
+
+        # Verify claim restored
+        get_response = client.get(f"/api/claims/{sample_claim_with_evidence}?include_evidence=true")
+        assert get_response.status_code == 200
+        restored = get_response.json()
+        assert restored["claim_id"] == sample_claim_with_evidence
+        assert len(restored["evidence"]) == 1

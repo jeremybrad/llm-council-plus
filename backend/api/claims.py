@@ -5,7 +5,8 @@ Routes validate requests, call CRUD functions, and return serialized responses.
 
 Endpoints:
 - GET /api/claims - List claims with filters and pagination
-- GET /api/claims/export - Export claims bundle (JSON/CSV)
+- GET /api/claims/export - Export claims bundle (backup/migration)
+- POST /api/claims/import - Import claims from export bundle
 - GET /api/claims/{claim_id} - Get single claim
 - POST /api/claims - Create candidate claim
 - PATCH /api/claims/{claim_id} - Update status/temporal fields
@@ -28,6 +29,7 @@ from ..claims import (
     update_claim,
     add_evidence,
     get_all_claims,
+    import_claim,
     Evidence as EvidenceDataclass,
     Claim as ClaimDataclass,
     StatusTransitionError,
@@ -363,6 +365,55 @@ class ExportBundleResponse(BaseModel):
     claims: List[ExportClaimData]
 
 
+class ImportClaimData(BaseModel):
+    """Claim data for import (matches export format)."""
+
+    claim_id: str
+    claim_text: str
+    claim_type: str = Field(..., pattern="^(biographical|preference|belief|event|relationship|project)$")
+    confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+    status: str = Field(default="candidate", pattern="^(candidate|accepted|disputed|deprecated)$")
+    as_of: Optional[str] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    created_at: Optional[str] = None
+    last_reviewed_at: Optional[str] = None
+    score_breakdown: Optional[Dict[str, Any]] = None
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    review_history: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ImportBundleRequest(BaseModel):
+    """Request body for importing claims bundle."""
+
+    claims: List[ImportClaimData]
+    on_duplicate: str = Field(
+        default="skip",
+        pattern="^(skip|overwrite|error)$",
+        description="How to handle existing claim_ids: skip, overwrite, or error",
+    )
+
+
+class ImportResultItem(BaseModel):
+    """Result for a single imported claim."""
+
+    claim_id: str
+    status: str  # "created", "skipped", "overwritten", "error"
+    error: Optional[str] = None
+
+
+class ImportBundleResponse(BaseModel):
+    """Response from import operation."""
+
+    imported_at: str
+    total_in_bundle: int
+    created: int
+    skipped: int
+    overwritten: int
+    errors: int
+    results: List[ImportResultItem]
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -524,6 +575,78 @@ async def export_claims(
     return ExportBundleResponse(
         metadata=metadata,
         claims=export_claims,
+    )
+
+
+@router.post("/import", response_model=ImportBundleResponse)
+async def import_claims(request: ImportBundleRequest):
+    """Import claims from an export bundle.
+
+    Restores claims from a previously exported bundle. Each claim preserves:
+    - Original claim_id
+    - All evidence with IDs
+    - Complete review history (with import event appended)
+    - Score breakdown
+    - Temporal validity fields
+
+    The `on_duplicate` parameter controls behavior when a claim_id already exists:
+    - `skip` (default): Keep existing claim, skip import
+    - `overwrite`: Replace existing claim with imported data
+    - `error`: Return error for that claim (other claims still processed)
+
+    Returns a summary of the import operation with per-claim results.
+    """
+    results = []
+    created = 0
+    skipped = 0
+    overwritten = 0
+    errors = 0
+
+    for claim_data in request.claims:
+        try:
+            # Convert Pydantic model to dict
+            claim_dict = claim_data.model_dump()
+
+            claim, status = import_claim(claim_dict, on_duplicate=request.on_duplicate)
+
+            results.append(ImportResultItem(
+                claim_id=claim_data.claim_id,
+                status=status,
+                error=None,
+            ))
+
+            if status == "created":
+                created += 1
+            elif status == "skipped":
+                skipped += 1
+            elif status == "overwritten":
+                overwritten += 1
+
+        except ValueError as e:
+            # on_duplicate="error" case
+            results.append(ImportResultItem(
+                claim_id=claim_data.claim_id,
+                status="error",
+                error=str(e),
+            ))
+            errors += 1
+
+        except Exception as e:
+            results.append(ImportResultItem(
+                claim_id=claim_data.claim_id,
+                status="error",
+                error=f"Unexpected error: {str(e)}",
+            ))
+            errors += 1
+
+    return ImportBundleResponse(
+        imported_at=datetime.now(timezone.utc).isoformat(),
+        total_in_bundle=len(request.claims),
+        created=created,
+        skipped=skipped,
+        overwritten=overwritten,
+        errors=errors,
+        results=results,
     )
 
 
