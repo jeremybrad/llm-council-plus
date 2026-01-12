@@ -18,6 +18,7 @@ from .roundtable import run_roundtable, get_default_council, AgentConfig
 from .modes import get_mode_runner, ModeRunner
 from .modes.socrates_runner import SocratesRunner
 from .modes.json_recovery import recover_socrates_turn
+from .api import claims_router
 from .openai_compat import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -50,6 +51,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include API routers
+app.include_router(claims_router)
 
 
 class CreateConversationRequest(BaseModel):
