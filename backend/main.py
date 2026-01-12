@@ -18,6 +18,13 @@ from .roundtable import run_roundtable, get_default_council, AgentConfig
 from .modes import get_mode_runner, ModeRunner
 from .modes.socrates_runner import SocratesRunner
 from .modes.json_recovery import recover_socrates_turn
+from .openai_compat import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    generate_openai_stream,
+    generate_non_streaming_response,
+    get_available_models as get_roundtable_models
+)
 from pathlib import Path
 
 app = FastAPI(title="LLM Council Plus API")
@@ -1388,6 +1395,60 @@ async def get_fallacy(fallacy_id: str):
             return fallacy
 
     raise HTTPException(status_code=404, detail=f"Fallacy not found: {fallacy_id}")
+
+
+# ========================================
+# OPENAI-COMPATIBLE API ENDPOINTS
+# ========================================
+# These endpoints allow OpenWebUI and other OpenAI-compatible
+# clients to use Roundtable Mode as a selectable "model".
+
+@app.get("/v1/models")
+async def list_openai_models():
+    """List available models (OpenAI-compatible).
+
+    Returns Roundtable variants as available models.
+    """
+    return {
+        "object": "list",
+        "data": get_roundtable_models()
+    }
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(body: ChatCompletionRequest, request: Request):
+    """OpenAI-compatible chat completions endpoint.
+
+    Routes to Roundtable Mode for collaborative multi-model deliberation.
+    Supports streaming and non-streaming responses.
+
+    Configuration options (can be passed in request body):
+    - council_models: List of model IDs for the council
+    - num_rounds: Number of deliberation rounds (1-5)
+    - chair_model: Model for final synthesis
+    - moderator_model: Model for moderator synthesis
+    - max_parallel: Max concurrent model queries
+
+    Model variants:
+    - "roundtable" - Default settings
+    - "roundtable:fast" - 1 round, quick mode
+    - "roundtable:thorough" - 3 rounds
+    - "roundtable:deep" - 5 rounds
+    - "roundtable:N" - N rounds (e.g., "roundtable:2")
+    """
+    if body.stream:
+        return StreamingResponse(
+            generate_openai_stream(body, request),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            }
+        )
+    else:
+        response = await generate_non_streaming_response(body, request)
+        return response
 
 
 if __name__ == "__main__":

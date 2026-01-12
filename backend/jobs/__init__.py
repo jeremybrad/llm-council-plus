@@ -1,0 +1,10 @@
+"""Night Shift jobs package.
+
+This package contains job implementations for the Night Shift runner.
+Each job must inherit from BaseJob and implement the required methods.
+"""
+
+from .base import BaseJob, JobResult, JobStatus
+from .repo_docs_refresh import RepoDocsRefreshJob
+
+__all__ = ["BaseJob", "JobResult", "JobStatus", "RepoDocsRefreshJob"]

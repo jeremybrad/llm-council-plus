@@ -304,6 +304,169 @@ curl https://your-endpoint.com/v1/models -H "Authorization: Bearer $API_KEY"
 - FastAPI: Inject raw `Request` object to access `is_disconnected()`
 - React: Use spread operators for immutable state updates (StrictMode runs effects twice)
 
+## OpenAI-Compatible Endpoint (OpenWebUI Integration)
+
+The backend provides an OpenAI-compatible API at `/v1/chat/completions` that allows Roundtable to be used from OpenWebUI and other OpenAI-compatible clients.
+
+### Configuration in OpenWebUI
+
+1. **Add as Connection**:
+   - Go to Admin Settings → Connections
+   - Add new OpenAI-compatible endpoint:
+     - URL: `http://localhost:8002/v1`
+     - API Key: Any non-empty string (not validated)
+
+2. **Select Model**:
+   - After adding the connection, these models appear:
+     - `roundtable` - Default (3 rounds)
+     - `roundtable:fast` - Quick mode (1 round)
+     - `roundtable:thorough` - Standard (3 rounds)
+
+### Model Variants
+
+| Model String | Rounds | Use Case |
+|-------------|--------|----------|
+| `roundtable` | 3 | Default deliberation |
+| `roundtable:fast` | 1 | Quick responses |
+| `roundtable:thorough` | 3 | Standard depth |
+| `roundtable:deep` | 5 | Extended deliberation |
+| `roundtable:N` | N | Custom round count |
+
+### Request Parameters (via extra_body)
+
+```python
+# In OpenAI Python client:
+response = client.chat.completions.create(
+    model="roundtable:fast",
+    messages=[{"role": "user", "content": "Your question"}],
+    extra_body={
+        "council_models": ["ollama:llama3.2", "ollama:mistral"],
+        "num_rounds": 2,
+        "chair_model": "ollama:llama3.2",
+        "max_parallel": 2,
+        "timeout_seconds": 120
+    }
+)
+```
+
+### Streaming Progress
+
+During streaming, progress updates show:
+```
+[Roundtable Starting: 3 agents, 3 rounds]
+
+**Round 1: Opening**
+  - Builder responded
+  - Skeptic responded
+  - Contrarian responded
+
+**Round 2: Critique**
+...
+**Chair Final Synthesis...**
+
+---
+[Final synthesized answer appears here]
+```
+
+### Testing the Endpoint
+
+```bash
+# List available models
+curl http://localhost:8002/v1/models
+
+# Test chat completion (non-streaming)
+curl -X POST http://localhost:8002/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "roundtable:fast",
+    "messages": [{"role": "user", "content": "What is 2+2?"}],
+    "stream": false
+  }'
+
+# Streaming response
+curl -X POST http://localhost:8002/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "roundtable",
+    "messages": [{"role": "user", "content": "Explain async/await"}],
+    "stream": true
+  }'
+```
+
+### Requirements
+
+- Council must have at least 2 models configured in settings
+- Models must be accessible (Ollama running, API keys configured)
+
+## Night Shift Runner (Scheduled Jobs)
+
+The Night Shift runner provides a CLI for running overnight batch jobs with safety gates.
+
+### Safety Gates
+
+1. **Repo Root Verification**: `--expected-repo-root` is required and must match the actual git root
+2. **Preflight Mode**: Default behavior shows what would run; add `--go` to actually execute
+3. **Budget Enforcement**: Configurable limits on tasks, tokens, spend, and timeout
+
+### Usage
+
+```bash
+# List available jobs
+python -m backend.nightshift list
+
+# Preflight check (default - shows what would happen)
+python -m backend.nightshift run \
+  --job=repo_docs_refresh \
+  --expected-repo-root=/path/to/llm-council-plus
+
+# Actually execute
+python -m backend.nightshift run \
+  --job=repo_docs_refresh \
+  --expected-repo-root=/path/to/llm-council-plus \
+  --go
+
+# With budget limits
+python -m backend.nightshift run \
+  --job=repo_docs_refresh \
+  --expected-repo-root=/path/to/llm-council-plus \
+  --go \
+  --max-tasks=50 \
+  --timeout=1800
+```
+
+### Available Jobs
+
+| Job | Description |
+|-----|-------------|
+| `repo_docs_refresh` | Scan docs for broken links, TODOs, and generate health report |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error during execution |
+| 2 | Preflight only (no --go) or safety gate failed |
+
+### Cron Scheduling
+
+```bash
+# Edit crontab
+crontab -e
+
+# Run docs refresh every night at 2 AM
+0 2 * * * cd /path/to/llm-council-plus && .venv/bin/python -m backend.nightshift run --job=repo_docs_refresh --expected-repo-root=/path/to/llm-council-plus --go >> /var/log/nightshift.log 2>&1
+
+# Run weekly on Sundays at 3 AM with email notification
+0 3 * * 0 cd /path/to/llm-council-plus && .venv/bin/python -m backend.nightshift run --job=repo_docs_refresh --expected-repo-root=/path/to/llm-council-plus --go && mail -s "Night Shift Complete" you@example.com < reports/$(date +\%Y-\%m-\%d)_docs_health.md
+```
+
+### Output
+
+Reports are generated in the `reports/` directory:
+- `YYYY-MM-DD_docs_health.md` - Human-readable markdown report
+- `YYYY-MM-DD_docs_health.json` - Machine-readable JSON report
+
 ## Future Enhancements
 
 - Model performance analytics over time

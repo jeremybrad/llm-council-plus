@@ -230,5 +230,10 @@ def mock_settings():
         stage2_temperature = 0.3
         chairman_temperature = 0.4
         roundtable_debug_prompts = False  # Debug off by default in tests
+        # OpenAI-compatible endpoint settings
+        council_models = []  # Empty by default, tests can override
+        chairman_model = "mock:chairman"
+        roundtable_num_rounds = 3
+        roundtable_max_parallel = 2
 
     return MockSettings()
