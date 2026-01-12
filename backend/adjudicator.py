@@ -434,7 +434,8 @@ async def adjudicate_claim(
                 "status_updated_to": new_status,
             }
 
-            update_claim(claim_id, status=new_status, review_history_event=history_event)
+            # Panel consensus is sufficient justification for status change - use force
+            update_claim(claim_id, status=new_status, review_history_event=history_event, force=True)
             result.status_updated = True
             result.new_status = new_status
     else:

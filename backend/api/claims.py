@@ -28,6 +28,8 @@ from ..claims import (
     get_all_claims,
     Evidence as EvidenceDataclass,
     Claim as ClaimDataclass,
+    StatusTransitionError,
+    TRANSITION_RULES,
 )
 from ..adjudicator import adjudicate_claim, AdjudicationResult
 from ..evidence import search_evidence, get_sadb_status
@@ -60,6 +62,7 @@ class UpdateClaimRequest(BaseModel):
     valid_from: Optional[str] = None
     valid_until: Optional[str] = None
     note: Optional[str] = Field(None, max_length=500, description="Reason for update, stored in review_history")
+    force: bool = Field(False, description="Force status transition, bypassing validation rules (admin override)")
 
 
 class AddEvidenceRequest(BaseModel):
@@ -426,7 +429,19 @@ async def create_claim(request: CreateClaimRequest):
     return ClaimResponse.from_dataclass(claim, include_evidence=True, include_history=True)
 
 
-@router.patch("/{claim_id}", response_model=ClaimResponse)
+class StatusTransitionErrorResponse(BaseModel):
+    """Response for blocked status transitions."""
+
+    detail: str
+    current_status: str
+    target_status: str
+    reason: str
+    transition_rules: Dict[str, Any]
+
+
+@router.patch("/{claim_id}", response_model=ClaimResponse, responses={
+    409: {"model": StatusTransitionErrorResponse, "description": "Status transition blocked by rules"}
+})
 async def update_claim_by_id(claim_id: str, request: UpdateClaimRequest):
     """Update a claim's status or temporal fields.
 
@@ -434,6 +449,17 @@ async def update_claim_by_id(claim_id: str, request: UpdateClaimRequest):
     - status
     - as_of, valid_from, valid_until
     - note (stored in review_history)
+    - force (bypass status transition rules)
+
+    Status transitions are validated against rules:
+    - candidate → accepted: requires min confidence (0.7) and supporting evidence
+    - candidate → disputed: requires contradicting evidence
+    - accepted → disputed: requires strong contradiction
+    - * → deprecated: always allowed
+    - disputed → candidate: always allowed (rework)
+    - disputed → accepted: higher confidence bar (0.8)
+
+    Use force=true to bypass validation (admin override).
     """
     existing = get_claim(claim_id)
     if not existing:
@@ -458,17 +484,31 @@ async def update_claim_by_id(claim_id: str, request: UpdateClaimRequest):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "note": request.note,
             "fields_updated": list(kwargs.keys()),
+            "forced": request.force,
         }
 
     if not kwargs and not review_history_event:
         # Nothing to update
         return ClaimResponse.from_dataclass(existing, include_evidence=True, include_history=True)
 
-    claim = update_claim(
-        claim_id,
-        review_history_event=review_history_event,
-        **kwargs,
-    )
+    try:
+        claim = update_claim(
+            claim_id,
+            review_history_event=review_history_event,
+            force=request.force,
+            **kwargs,
+        )
+    except StatusTransitionError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "current_status": e.current_status,
+                "target_status": e.target_status,
+                "reason": e.reason,
+                "transition_rules": TRANSITION_RULES,
+            },
+        )
 
     return ClaimResponse.from_dataclass(claim, include_evidence=True, include_history=True)
 

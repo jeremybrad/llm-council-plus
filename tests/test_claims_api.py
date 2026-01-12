@@ -403,10 +403,10 @@ class TestUpdateClaim:
     """Tests for PATCH /api/claims/{claim_id} endpoint."""
 
     def test_update_claim_status(self, client, sample_claim):
-        """Update claim status."""
+        """Update claim status (using force to bypass validation)."""
         response = client.patch(
             f"/api/claims/{sample_claim.claim_id}",
-            json={"status": "accepted"},
+            json={"status": "accepted", "force": True},
         )
         assert response.status_code == 200
         data = response.json()
@@ -433,6 +433,7 @@ class TestUpdateClaim:
             json={
                 "status": "disputed",
                 "note": "Found contradicting evidence",
+                "force": True,  # Bypass transition rules for this test
             },
         )
         assert response.status_code == 200
@@ -851,3 +852,282 @@ class TestAdjudicateClaim:
             adj_events = [h for h in history if h.get("event") == "panel_adjudication"]
             assert len(adj_events) == 1
             assert adj_events[0]["consensus_verdict"] == "insufficient"
+
+
+# =============================================================================
+# Status Transition Rules Tests
+# =============================================================================
+
+
+class TestStatusTransitionRules:
+    """Tests for status transition validation rules."""
+
+    def test_candidate_to_accepted_blocked_no_evidence(self, client, sample_claim):
+        """Cannot accept claim without supporting evidence."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 409
+        data = response.json()
+        assert "detail" in data
+        assert data["detail"]["current_status"] == "candidate"
+        assert data["detail"]["target_status"] == "accepted"
+        # Should mention either confidence or evidence requirement
+        reason = data["detail"]["reason"].lower()
+        assert "confidence" in reason or "evidence" in reason
+
+    def test_candidate_to_accepted_blocked_low_confidence(self, client, sample_claim):
+        """Cannot accept claim with insufficient confidence."""
+        # Add weak evidence
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_weak",
+                "quote": "Maybe Python is okay",
+                "support": "supports",
+                "weight": 0.3,  # Low weight
+            },
+        )
+
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 409
+        data = response.json()
+        assert "confidence" in data["detail"]["reason"].lower()
+
+    def test_candidate_to_accepted_succeeds_with_strong_evidence(self, client, sample_claim):
+        """Can accept claim with sufficient evidence."""
+        # Add strong supporting evidence from two independent sources
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_001",
+                "quote": "I really love Python programming",
+                "support": "supports",
+                "weight": 0.9,
+            },
+        )
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "note",
+                "source_id": "note_001",
+                "quote": "Python is my favorite language",
+                "support": "supports",
+                "weight": 0.8,
+            },
+        )
+
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "accepted"
+
+    def test_candidate_to_disputed_blocked_no_contradiction(self, client, sample_claim):
+        """Cannot dispute claim without contradicting evidence."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed"},
+        )
+        assert response.status_code == 409
+        data = response.json()
+        assert "contradict" in data["detail"]["reason"].lower()
+
+    def test_candidate_to_disputed_succeeds_with_contradiction(self, client, sample_claim):
+        """Can dispute claim with contradicting evidence."""
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_contra",
+                "quote": "Python is actually not my thing",
+                "support": "contradicts",
+                "weight": 0.7,
+            },
+        )
+
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "disputed"
+
+    def test_to_deprecated_always_allowed(self, client, sample_claim):
+        """Can always deprecate a claim (soft delete)."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "deprecated"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "deprecated"
+
+    def test_disputed_to_candidate_always_allowed(self, client, sample_claim):
+        """Can always return disputed claim to candidate for rework."""
+        # First dispute the claim
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_contra",
+                "quote": "Contradicting evidence",
+                "support": "contradicts",
+                "weight": 0.7,
+            },
+        )
+        client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed"},
+        )
+
+        # Now return to candidate
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "candidate"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "candidate"
+
+    def test_disputed_to_accepted_requires_higher_confidence(self, client, sample_claim):
+        """Re-accepting after dispute requires higher confidence (0.8 vs 0.7)."""
+        # Add evidence and dispute
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_001",
+                "quote": "Supporting but moderate evidence",
+                "support": "supports",
+                "weight": 0.8,
+            },
+        )
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_contra",
+                "quote": "Some contradiction",
+                "support": "contradicts",
+                "weight": 0.5,
+            },
+        )
+        # Force dispute to test re-acceptance
+        client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed", "force": True},
+        )
+
+        # Try to re-accept - should fail without enough confidence
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 409
+        data = response.json()
+        assert "0.8" in data["detail"]["reason"]  # Higher bar mentioned
+
+    def test_force_bypasses_validation(self, client, sample_claim):
+        """force=True bypasses transition rules."""
+        # Try to accept without evidence - should fail normally
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 409
+
+        # Now with force=True
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted", "force": True},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "accepted"
+
+    def test_force_recorded_in_history(self, client, sample_claim):
+        """Forced transitions are recorded in review history."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={
+                "status": "accepted",
+                "force": True,
+                "note": "Admin override for testing",
+            },
+        )
+        assert response.status_code == 200
+        history = response.json()["review_history"]
+
+        # Should have status_changed event with forced=True
+        status_events = [h for h in history if h.get("event") == "status_changed"]
+        assert len(status_events) == 1
+        assert status_events[0]["forced"] is True
+
+    def test_transition_rules_in_error_response(self, client, sample_claim):
+        """409 response includes transition rules for transparency."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted"},
+        )
+        assert response.status_code == 409
+        data = response.json()
+        assert "transition_rules" in data["detail"]
+        assert "accept_min_confidence" in data["detail"]["transition_rules"]
+
+    def test_accepted_to_disputed_requires_strong_contradiction(self, client, sample_claim):
+        """Disputing an accepted claim requires strong contradiction."""
+        # First accept the claim with force
+        client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted", "force": True},
+        )
+
+        # Try to dispute without strong contradiction
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed"},
+        )
+        assert response.status_code == 409
+        assert "contradiction" in response.json()["detail"]["reason"].lower()
+
+    def test_accepted_to_disputed_succeeds_with_strong_contradiction(self, client, sample_claim):
+        """Can dispute accepted claim with strong contradiction."""
+        # Accept with force
+        client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "accepted", "force": True},
+        )
+
+        # Add strong contradiction
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_strong_contra",
+                "quote": "Actually I hate Python now",
+                "support": "contradicts",
+                "weight": 0.8,
+            },
+        )
+
+        # Now dispute should work
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "disputed"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "disputed"
+
+    def test_same_status_is_noop(self, client, sample_claim):
+        """Setting same status is allowed (no-op)."""
+        response = client.patch(
+            f"/api/claims/{sample_claim.claim_id}",
+            json={"status": "candidate"},  # Already candidate
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "candidate"

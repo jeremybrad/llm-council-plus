@@ -26,6 +26,126 @@ import portalocker
 from .scorer import ScoreBreakdown, calculate_confidence_with_breakdown
 
 
+# =============================================================================
+# Status Transition Rules
+# =============================================================================
+
+# Valid status values
+VALID_STATUSES = {"candidate", "accepted", "disputed", "deprecated"}
+
+# Transition thresholds (configurable)
+TRANSITION_RULES = {
+    "accept_min_confidence": 0.7,       # Min confidence to accept
+    "accept_min_supporting": 1,         # Min supporting evidence to accept
+    "accept_max_contradiction_weight": 0.6,  # Max weight of contradictions allowed
+    "dispute_min_contradiction_weight": 0.5,  # Min weight to trigger dispute
+    "reaccept_min_confidence": 0.8,     # Higher bar to re-accept after dispute
+}
+
+
+class StatusTransitionError(ValueError):
+    """Raised when a status transition is blocked by rules."""
+
+    def __init__(self, message: str, current_status: str, target_status: str, reason: str):
+        super().__init__(message)
+        self.current_status = current_status
+        self.target_status = target_status
+        self.reason = reason
+
+
+def validate_status_transition(
+    claim: "Claim",
+    new_status: str,
+    force: bool = False,
+) -> Optional[str]:
+    """Validate a status transition against rules.
+
+    Args:
+        claim: The claim being updated
+        new_status: The target status
+        force: If True, skip validation (for admin overrides)
+
+    Returns:
+        None if transition is allowed, or error message if blocked
+
+    Transition rules:
+    - candidate → accepted: confidence ≥ threshold, min supporting evidence, no strong contradictions
+    - candidate → disputed: at least one contradiction with sufficient weight
+    - accepted → disputed: at least one strong contradiction (weight ≥ threshold)
+    - * → deprecated: always allowed (soft delete)
+    - disputed → candidate: always allowed (for rework)
+    - disputed → accepted: higher confidence bar, contradictions must be resolved
+    """
+    if force:
+        return None
+
+    old_status = claim.status
+
+    # Same status - no-op
+    if old_status == new_status:
+        return None
+
+    # Invalid status
+    if new_status not in VALID_STATUSES:
+        return f"Invalid status: {new_status}"
+
+    # Deprecated is always allowed (soft delete)
+    if new_status == "deprecated":
+        return None
+
+    # Gather evidence stats
+    supporting = [e for e in claim.evidence if e.support == "supports"]
+    contradicting = [e for e in claim.evidence if e.support == "contradicts"]
+    max_contradiction_weight = max((e.weight for e in contradicting), default=0.0)
+
+    rules = TRANSITION_RULES
+
+    # === Transitions TO accepted ===
+    if new_status == "accepted":
+        # From disputed - higher bar
+        min_conf = rules["reaccept_min_confidence"] if old_status == "disputed" else rules["accept_min_confidence"]
+
+        if claim.confidence < min_conf:
+            return f"Confidence {claim.confidence:.2f} below threshold {min_conf} for acceptance"
+
+        if len(supporting) < rules["accept_min_supporting"]:
+            return f"Need at least {rules['accept_min_supporting']} supporting evidence (have {len(supporting)})"
+
+        if max_contradiction_weight > rules["accept_max_contradiction_weight"]:
+            return f"Strong contradiction (weight {max_contradiction_weight:.2f}) blocks acceptance"
+
+        return None
+
+    # === Transitions TO disputed ===
+    if new_status == "disputed":
+        # From accepted - need strong contradiction
+        if old_status == "accepted":
+            min_weight = rules["dispute_min_contradiction_weight"]
+            if max_contradiction_weight < min_weight:
+                return f"No contradiction strong enough (max weight {max_contradiction_weight:.2f}, need ≥{min_weight})"
+
+        # From candidate - any contradiction suffices
+        if old_status == "candidate":
+            if not contradicting:
+                return "No contradicting evidence to support disputed status"
+
+        return None
+
+    # === Transitions TO candidate ===
+    if new_status == "candidate":
+        # From disputed - always allowed (rework)
+        if old_status == "disputed":
+            return None
+
+        # From accepted - demoting, always allowed
+        if old_status == "accepted":
+            return None
+
+        return None
+
+    return None
+
+
 # Storage paths (relative to project root)
 DATA_DIR = Path(__file__).parent.parent / "data"
 CLAIMS_DIR = DATA_DIR / "claims"
@@ -429,6 +549,7 @@ def add_evidence(claim_id: str, evidence: Evidence) -> Claim:
 def update_claim(
     claim_id: str,
     review_history_event: Optional[Dict[str, Any]] = None,
+    force: bool = False,
     **kwargs,
 ) -> Claim:
     """Update claim fields and optionally append to review_history.
@@ -436,6 +557,7 @@ def update_claim(
     Args:
         claim_id: The claim to update
         review_history_event: Optional event dict to append to history
+        force: If True, skip status transition validation (admin override)
         **kwargs: Fields to update (status, confidence, evidence, etc.)
 
     Returns:
@@ -443,6 +565,7 @@ def update_claim(
 
     Raises:
         ValueError: If claim not found
+        StatusTransitionError: If status transition is blocked by rules
     """
     claims = _load_claims()
     claim = claims.get(claim_id)
@@ -451,6 +574,17 @@ def update_claim(
 
     now = datetime.now(timezone.utc).isoformat()
     old_status = claim.status
+
+    # Validate status transition if status is being changed
+    if 'status' in kwargs and kwargs['status'] != old_status:
+        error = validate_status_transition(claim, kwargs['status'], force=force)
+        if error:
+            raise StatusTransitionError(
+                f"Cannot transition from '{old_status}' to '{kwargs['status']}': {error}",
+                current_status=old_status,
+                target_status=kwargs['status'],
+                reason=error,
+            )
 
     # Update fields
     for key, value in kwargs.items():
@@ -464,6 +598,7 @@ def update_claim(
             "timestamp": now,
             "old_status": old_status,
             "new_status": kwargs['status'],
+            "forced": force,
         })
         _log_to_history({
             "event": "status_changed",
@@ -471,6 +606,7 @@ def update_claim(
             "claim_id": claim_id,
             "old_status": old_status,
             "new_status": kwargs['status'],
+            "forced": force,
         })
 
     # Append custom review history event if provided

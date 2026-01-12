@@ -428,7 +428,7 @@ class TestQueryAndFilter:
 
         claim1 = add_claim("Candidate claim", "biographical")
         claim2 = add_claim("Accepted claim", "biographical")
-        update_claim(claim2.claim_id, status="accepted")
+        update_claim(claim2.claim_id, status="accepted", force=True)
 
         candidates = query_claims(status="candidate")
         accepted = query_claims(status="accepted")
@@ -575,13 +575,14 @@ class TestReviewHistory:
         update_claim = claims_module["update_claim"]
 
         claim = add_claim("Test claim", "biographical")
-        updated = update_claim(claim.claim_id, status="accepted")
+        updated = update_claim(claim.claim_id, status="accepted", force=True)
 
         # Find status_changed event
         status_changed = [e for e in updated.review_history if e["event"] == "status_changed"]
         assert len(status_changed) == 1
         assert status_changed[0]["old_status"] == "candidate"
         assert status_changed[0]["new_status"] == "accepted"
+        assert status_changed[0]["forced"] is True
 
     def test_confidence_updated_event(self, claims_module):
         """Significant confidence changes should log event with breakdown."""
