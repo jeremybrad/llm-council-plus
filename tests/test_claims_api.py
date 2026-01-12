@@ -599,20 +599,44 @@ class TestValidateClaim:
         response = client.post("/api/claims/nonexistent-id/validate")
         assert response.status_code == 404
 
-    def test_validate_claim_sadb_unavailable(self, client, sample_claim):
-        """Returns gracefully when SADB unavailable."""
+    def test_validate_claim_sadb_not_ready(self, client, sample_claim):
+        """Returns gracefully with honest status when SADB not ready."""
         with patch("backend.api.claims.get_sadb_status") as mock_status:
-            mock_status.return_value = {"available": False}
+            mock_status.return_value = {
+                "sadb_importable": True,
+                "sadb_ready": False,
+                "sadb_error": "Neo4j unreachable (neo4j://localhost:7687): Connection refused",
+            }
 
             response = client.post(f"/api/claims/{sample_claim.claim_id}/validate")
             assert response.status_code == 200
             data = response.json()
-            assert data["sadb_available"] is False
+            assert data["sadb_importable"] is True
+            assert data["sadb_ready"] is False
+            assert data["sadb_error"] is not None
+            assert "Neo4j" in data["sadb_error"]
             assert data["evidence_added"] == 0
             assert data["old_confidence"] == data["new_confidence"]
 
+    def test_validate_claim_sadb_not_importable(self, client, sample_claim):
+        """Returns gracefully when SADB module not importable."""
+        with patch("backend.api.claims.get_sadb_status") as mock_status:
+            mock_status.return_value = {
+                "sadb_importable": False,
+                "sadb_ready": False,
+                "sadb_error": "SADB module not importable",
+            }
+
+            response = client.post(f"/api/claims/{sample_claim.claim_id}/validate")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["sadb_importable"] is False
+            assert data["sadb_ready"] is False
+            assert data["sadb_error"] == "SADB module not importable"
+            assert data["evidence_added"] == 0
+
     def test_validate_claim_with_sadb(self, client, sample_claim):
-        """Validation adds evidence when SADB available."""
+        """Validation adds evidence when SADB ready."""
         mock_evidence = Evidence(
             evidence_id="ev_sadb_001",
             source_type="transcript",
@@ -628,14 +652,20 @@ class TestValidateClaim:
              patch("backend.api.claims.search_evidence") as mock_search, \
              patch("backend.api.claims.classify_support") as mock_classify:
 
-            mock_status.return_value = {"available": True}
+            mock_status.return_value = {
+                "sadb_importable": True,
+                "sadb_ready": True,
+                "sadb_error": None,
+            }
             mock_search.return_value = [mock_evidence]
             mock_classify.return_value = "supports"
 
             response = client.post(f"/api/claims/{sample_claim.claim_id}/validate")
             assert response.status_code == 200
             data = response.json()
-            assert data["sadb_available"] is True
+            assert data["sadb_importable"] is True
+            assert data["sadb_ready"] is True
+            assert data["sadb_error"] is None
             assert data["evidence_added"] == 1
             assert data["claim"] is not None
 

@@ -256,7 +256,9 @@ class ValidateResponse(BaseModel):
     """Response from single-claim validation."""
 
     claim_id: str
-    sadb_available: bool
+    sadb_importable: bool  # SADB module can be imported
+    sadb_ready: bool  # All checks pass (import + driver + connectivity)
+    sadb_error: Optional[str] = None  # First error encountered (if any)
     evidence_added: int
     old_confidence: float
     new_confidence: float
@@ -828,12 +830,19 @@ async def validate_claim(claim_id: str):
 
     old_confidence = existing.confidence
 
-    # Check SADB availability
+    # Check SADB readiness (import + driver + connectivity)
     sadb_status = get_sadb_status()
-    if not sadb_status["available"]:
+    sadb_importable = sadb_status["sadb_importable"]
+    sadb_ready = sadb_status["sadb_ready"]
+    sadb_error = sadb_status.get("sadb_error")
+
+    # If not ready, return gracefully with honest status
+    if not sadb_ready:
         return ValidateResponse(
             claim_id=claim_id,
-            sadb_available=False,
+            sadb_importable=sadb_importable,
+            sadb_ready=False,
+            sadb_error=sadb_error,
             evidence_added=0,
             old_confidence=old_confidence,
             new_confidence=old_confidence,
@@ -861,7 +870,9 @@ async def validate_claim(claim_id: str):
 
     return ValidateResponse(
         claim_id=claim_id,
-        sadb_available=True,
+        sadb_importable=True,
+        sadb_ready=True,
+        sadb_error=None,
         evidence_added=evidence_added,
         old_confidence=old_confidence,
         new_confidence=updated.confidence,

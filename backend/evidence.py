@@ -30,6 +30,12 @@ SADB_CLI_PATH = Path(
     )
 )
 
+# Neo4j connection URI - configurable via environment variable
+# Defaults to localhost for host machine (not Docker)
+SADB_NEO4J_URI = os.environ.get("SADB_NEO4J_URI", "neo4j://localhost:7687")
+SADB_NEO4J_USER = os.environ.get("SADB_NEO4J_USER", "neo4j")
+SADB_NEO4J_PASSWORD = os.environ.get("SADB_NEO4J_PASSWORD", "password")
+
 
 def _check_sadb_available() -> bool:
     """Check if SADB is available for queries.
@@ -199,21 +205,100 @@ async def get_document(source_id: str) -> Optional[str]:
     return None
 
 
-def get_sadb_status() -> dict:
-    """Get SADB availability status for diagnostics.
+def _check_neo4j_driver_available() -> tuple[bool, Optional[str]]:
+    """Check if neo4j Python driver is installed.
 
     Returns:
-        Dict with availability status and any error messages
+        Tuple of (available, error_message)
     """
-    available = _check_sadb_available()
+    try:
+        import neo4j  # noqa: F401
+        return True, None
+    except ImportError as e:
+        return False, f"neo4j driver not installed: {e}"
 
-    status = {
-        "available": available,
+
+def _check_neo4j_connectivity() -> tuple[bool, Optional[str]]:
+    """Check if Neo4j is reachable with a simple ping query.
+
+    Returns:
+        Tuple of (reachable, error_message)
+    """
+    try:
+        from neo4j import GraphDatabase
+
+        # Quick connectivity check with short timeout
+        driver = GraphDatabase.driver(
+            SADB_NEO4J_URI,
+            auth=(SADB_NEO4J_USER, SADB_NEO4J_PASSWORD),
+        )
+        try:
+            # Verify connectivity with a trivial query
+            with driver.session() as session:
+                result = session.run("RETURN 1 AS ping")
+                record = result.single()
+                if record and record["ping"] == 1:
+                    return True, None
+                return False, "Neo4j ping query returned unexpected result"
+        finally:
+            driver.close()
+    except Exception as e:
+        # Sanitize error message (don't leak credentials)
+        error_str = str(e)
+        if SADB_NEO4J_PASSWORD in error_str:
+            error_str = error_str.replace(SADB_NEO4J_PASSWORD, "***")
+        return False, f"Neo4j unreachable ({SADB_NEO4J_URI}): {error_str}"
+
+
+def get_sadb_status() -> dict:
+    """Get SADB availability status with real readiness checks.
+
+    Performs three-level check:
+    1. SADB module importable (code available)
+    2. Neo4j driver importable (dependency present)
+    3. Neo4j connectivity (service reachable)
+
+    Returns:
+        Dict with:
+        - sadb_importable: bool - can import SADB retrieve module
+        - neo4j_driver_available: bool - neo4j Python package installed
+        - neo4j_reachable: bool - can connect and ping Neo4j
+        - sadb_ready: bool - all checks pass, retrieval should work
+        - sadb_error: str | None - first error encountered (if any)
+        - sadb_path: str - configured SADB CLI path
+        - neo4j_uri: str - configured Neo4j URI (no credentials)
+    """
+    errors = []
+
+    # Check 1: SADB module importable
+    sadb_importable = _check_sadb_available()
+    if not sadb_importable:
+        errors.append("SADB module not importable")
+
+    # Check 2: Neo4j driver available
+    neo4j_driver_available, driver_error = _check_neo4j_driver_available()
+    if not neo4j_driver_available and driver_error:
+        errors.append(driver_error)
+
+    # Check 3: Neo4j connectivity (only if driver is available)
+    neo4j_reachable = False
+    if neo4j_driver_available:
+        neo4j_reachable, conn_error = _check_neo4j_connectivity()
+        if not neo4j_reachable and conn_error:
+            errors.append(conn_error)
+
+    # Overall readiness: all checks must pass
+    sadb_ready = sadb_importable and neo4j_driver_available and neo4j_reachable
+
+    return {
+        "sadb_importable": sadb_importable,
+        "neo4j_driver_available": neo4j_driver_available,
+        "neo4j_reachable": neo4j_reachable,
+        "sadb_ready": sadb_ready,
+        "sadb_error": errors[0] if errors else None,
         "sadb_path": str(SADB_CLI_PATH),
         "sadb_path_exists": SADB_CLI_PATH.exists(),
+        "neo4j_uri": SADB_NEO4J_URI,
+        # Legacy field for backwards compatibility
+        "available": sadb_importable,
     }
-
-    if not available:
-        status["error"] = "SADB module could not be imported"
-
-    return status
