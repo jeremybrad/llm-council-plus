@@ -5,11 +5,13 @@ Routes validate requests, call CRUD functions, and return serialized responses.
 
 Endpoints:
 - GET /api/claims - List claims with filters and pagination
+- GET /api/claims/export - Export claims bundle (JSON/CSV)
 - GET /api/claims/{claim_id} - Get single claim
 - POST /api/claims - Create candidate claim
 - PATCH /api/claims/{claim_id} - Update status/temporal fields
 - POST /api/claims/{claim_id}/evidence - Add evidence
 - POST /api/claims/{claim_id}/validate - Single-claim SADB validation
+- POST /api/claims/{claim_id}/adjudicate - Panel adjudication
 """
 
 import uuid
@@ -286,6 +288,81 @@ class AdjudicateResponse(BaseModel):
     claim: Optional[ClaimResponse] = None
 
 
+class ExportMetadata(BaseModel):
+    """Metadata for export bundle."""
+
+    exported_at: str
+    format: str
+    total_claims: int
+    total_evidence: int
+    filters_applied: Dict[str, Any]
+    transition_rules: Dict[str, Any]
+
+
+class ExportClaimData(BaseModel):
+    """Full claim data for export (no truncation)."""
+
+    claim_id: str
+    claim_text: str
+    claim_type: str
+    confidence: float
+    status: str
+    as_of: Optional[str] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    created_at: str
+    last_reviewed_at: Optional[str] = None
+    score_breakdown: Optional[ScoreBreakdownResponse] = None
+    evidence: List[EvidenceResponse]
+    review_history: List[Dict[str, Any]]
+
+    @classmethod
+    def from_dataclass(cls, claim: ClaimDataclass) -> "ExportClaimData":
+        """Create from Claim dataclass with full data (no truncation)."""
+        score_breakdown = None
+        if claim.score_breakdown:
+            score_breakdown = ScoreBreakdownResponse(
+                base_score=claim.score_breakdown.base_score,
+                supporting_bonus=claim.score_breakdown.supporting_bonus,
+                independence_bonus=claim.score_breakdown.independence_bonus,
+                contradiction_penalty=claim.score_breakdown.contradiction_penalty,
+                final_score=claim.score_breakdown.final_score,
+                evidence_ids_used=claim.score_breakdown.evidence_ids_used,
+                calculation_timestamp=claim.score_breakdown.calculation_timestamp,
+                cap_applied=claim.score_breakdown.cap_applied,
+                cap_reason=claim.score_breakdown.cap_reason,
+            )
+
+        # Full quotes, no truncation
+        evidence = [
+            EvidenceResponse.from_dataclass(e, quote_max_len=10000)
+            for e in claim.evidence
+        ]
+
+        return cls(
+            claim_id=claim.claim_id,
+            claim_text=claim.claim_text,
+            claim_type=claim.claim_type,
+            confidence=claim.confidence,
+            status=claim.status,
+            as_of=claim.as_of,
+            valid_from=claim.valid_from,
+            valid_until=claim.valid_until,
+            created_at=claim.created_at,
+            last_reviewed_at=claim.last_reviewed_at,
+            score_breakdown=score_breakdown,
+            evidence=evidence,
+            review_history=claim.review_history,
+        )
+
+
+class ExportBundleResponse(BaseModel):
+    """Complete export bundle with metadata and claims."""
+
+    metadata: ExportMetadata
+    claims: List[ExportClaimData]
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -376,6 +453,77 @@ async def list_claims(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/export", response_model=ExportBundleResponse)
+async def export_claims(
+    status: Optional[str] = Query(None, pattern="^(candidate|accepted|disputed|deprecated)$"),
+    claim_type: Optional[str] = Query(None, pattern="^(biographical|preference|belief|event|relationship|project)$"),
+    min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
+    valid_at: Optional[str] = Query(None, description="ISO timestamp for temporal filtering"),
+    q: Optional[str] = Query(None, max_length=200, description="Substring search on claim_text"),
+):
+    """Export claims bundle with full evidence and history.
+
+    Returns a complete export bundle suitable for backup, migration, or analysis.
+    Unlike the list endpoint, this includes:
+    - Full quotes (no truncation)
+    - All evidence for each claim
+    - Complete review history
+    - Export metadata with filters applied
+
+    Query parameters (all optional):
+    - status: Filter by claim status
+    - claim_type: Filter by claim type
+    - min_confidence: Filter by minimum confidence score
+    - valid_at: Filter by temporal validity
+    - q: Substring search on claim_text
+    """
+    # Query claims using store function
+    claims = query_claims(
+        status=status,
+        claim_type=claim_type,
+        min_confidence=min_confidence,
+        valid_at=valid_at,
+    )
+
+    # Apply substring search if provided
+    if q:
+        q_lower = q.lower()
+        claims = [c for c in claims if q_lower in c.claim_text.lower()]
+
+    # Convert to export format (full data, no truncation)
+    export_claims = [ExportClaimData.from_dataclass(c) for c in claims]
+
+    # Count total evidence
+    total_evidence = sum(len(c.evidence) for c in export_claims)
+
+    # Build filters applied dict
+    filters_applied = {}
+    if status:
+        filters_applied["status"] = status
+    if claim_type:
+        filters_applied["claim_type"] = claim_type
+    if min_confidence is not None:
+        filters_applied["min_confidence"] = min_confidence
+    if valid_at:
+        filters_applied["valid_at"] = valid_at
+    if q:
+        filters_applied["q"] = q
+
+    metadata = ExportMetadata(
+        exported_at=datetime.now(timezone.utc).isoformat(),
+        format="json",
+        total_claims=len(export_claims),
+        total_evidence=total_evidence,
+        filters_applied=filters_applied,
+        transition_rules=TRANSITION_RULES,
+    )
+
+    return ExportBundleResponse(
+        metadata=metadata,
+        claims=export_claims,
     )
 
 

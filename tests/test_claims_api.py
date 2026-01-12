@@ -1131,3 +1131,175 @@ class TestStatusTransitionRules:
         )
         assert response.status_code == 200
         assert response.json()["status"] == "candidate"
+
+
+# =============================================================================
+# GET /api/claims/export - Export Claims Bundle
+# =============================================================================
+
+
+class TestExportClaims:
+    """Tests for GET /api/claims/export endpoint."""
+
+    def test_export_empty(self, client):
+        """Export with no claims returns empty bundle."""
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["metadata"]["total_claims"] == 0
+        assert data["metadata"]["total_evidence"] == 0
+        assert data["metadata"]["format"] == "json"
+        assert data["claims"] == []
+
+    def test_export_with_claims(self, client, sample_claim_with_evidence):
+        """Export includes claims with full evidence."""
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["metadata"]["total_claims"] == 1
+        assert data["metadata"]["total_evidence"] == 1
+        assert len(data["claims"]) == 1
+
+        # Check claim has full data
+        claim = data["claims"][0]
+        assert claim["claim_id"] == sample_claim_with_evidence
+        assert claim["evidence"] is not None
+        assert len(claim["evidence"]) == 1
+        assert claim["review_history"] is not None
+
+    def test_export_no_quote_truncation(self, client, sample_claim):
+        """Export includes full quotes without truncation."""
+        # Add evidence with very long quote
+        long_quote = "A" * 1000
+        client.post(
+            f"/api/claims/{sample_claim.claim_id}/evidence",
+            json={
+                "source_type": "transcript",
+                "source_id": "conv_long",
+                "quote": long_quote,
+                "support": "supports",
+                "weight": 0.7,
+            },
+        )
+
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Quote should NOT be truncated
+        quote = data["claims"][0]["evidence"][0]["quote"]
+        assert len(quote) == 1000
+        assert "..." not in quote
+
+    def test_export_filter_by_status(self, client):
+        """Export respects status filter."""
+        # Create claims with different statuses
+        claim1 = add_claim("Candidate claim", "preference")
+        claim2 = add_claim("Accepted claim", "preference")
+        from backend.claims import update_claim
+        update_claim(claim2.claim_id, status="accepted", force=True)
+
+        response = client.get("/api/claims/export?status=candidate")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["metadata"]["total_claims"] == 1
+        assert data["metadata"]["filters_applied"]["status"] == "candidate"
+        assert data["claims"][0]["status"] == "candidate"
+
+    def test_export_filter_by_type(self, client, sample_claim):
+        """Export respects claim_type filter."""
+        # sample_claim is type "preference"
+        add_claim("Biographical claim", "biographical")
+
+        response = client.get("/api/claims/export?claim_type=preference")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["metadata"]["total_claims"] == 1
+        assert data["metadata"]["filters_applied"]["claim_type"] == "preference"
+        assert data["claims"][0]["claim_type"] == "preference"
+
+    def test_export_filter_by_min_confidence(self, client, sample_claim_with_evidence):
+        """Export respects min_confidence filter."""
+        add_claim("Low confidence claim", "preference")  # Default 0.3
+
+        response = client.get("/api/claims/export?min_confidence=0.4")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Only the claim with evidence (higher confidence) should be included
+        assert data["metadata"]["total_claims"] == 1
+        assert data["metadata"]["filters_applied"]["min_confidence"] == 0.4
+
+    def test_export_filter_by_substring(self, client, sample_claim):
+        """Export respects substring search."""
+        add_claim("JavaScript is great", "preference")
+
+        response = client.get("/api/claims/export?q=Python")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["metadata"]["total_claims"] == 1
+        assert data["metadata"]["filters_applied"]["q"] == "Python"
+        assert "Python" in data["claims"][0]["claim_text"]
+
+    def test_export_includes_transition_rules(self, client, sample_claim):
+        """Export metadata includes transition rules."""
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        rules = data["metadata"]["transition_rules"]
+        assert "accept_min_confidence" in rules
+        assert "accept_min_supporting" in rules
+        assert "dispute_min_contradiction_weight" in rules
+
+    def test_export_includes_score_breakdown(self, client, sample_claim_with_evidence):
+        """Export includes score breakdown for claims with evidence."""
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        claim = data["claims"][0]
+        assert claim["score_breakdown"] is not None
+        assert "base_score" in claim["score_breakdown"]
+        assert "final_score" in claim["score_breakdown"]
+
+    def test_export_multiple_claims(self, client):
+        """Export handles multiple claims correctly."""
+        # Create 5 claims
+        for i in range(5):
+            claim = add_claim(f"Claim {i}", "biographical")
+            # Add evidence to some
+            if i % 2 == 0:
+                client.post(
+                    f"/api/claims/{claim.claim_id}/evidence",
+                    json={
+                        "source_type": "note",
+                        "source_id": f"note_{i}",
+                        "quote": f"Evidence for claim {i}",
+                        "support": "supports",
+                        "weight": 0.6,
+                    },
+                )
+
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["metadata"]["total_claims"] == 5
+        assert data["metadata"]["total_evidence"] == 3  # Claims 0, 2, 4 have evidence
+        assert len(data["claims"]) == 5
+
+    def test_export_timestamp_format(self, client, sample_claim):
+        """Export timestamp is valid ISO format."""
+        response = client.get("/api/claims/export")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should be parseable as ISO timestamp
+        from datetime import datetime
+        exported_at = data["metadata"]["exported_at"]
+        datetime.fromisoformat(exported_at.replace("Z", "+00:00"))
