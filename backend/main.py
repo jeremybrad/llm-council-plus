@@ -1254,7 +1254,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
         }
 
         # Update session
-        runner.session_store.update_session(
+        updated_session = runner.session_store.update_session(
             session_id=session.session_id,
             ledger=session.ledger,
             messages=session.messages,
@@ -1263,10 +1263,10 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
             stop_criteria_met=criteria_met
         )
 
-        # Build response
+        # Build response - use updated_session for correct turn_count
         return {
             "success": result["success"],
-            "turn": session.turn_count,
+            "turn": updated_session.turn_count,
             "output": {
                 "next_question": output.get("next_question"),
                 "question_type": output.get("question_type"),
@@ -1274,12 +1274,13 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
                 "why_this_question": output.get("why_this_question"),
                 "stop_check": output.get("stop_check")
             },
-            "ledger_active_view": runner.get_active_ledger_view(session.ledger),
+            "ledger_active_view": runner.get_active_ledger_view(updated_session.ledger),
             "stop_recommended": stop_recommended,
             "criteria_met": criteria_met,
             "parse_error": result.get("error"),
-            "session_status": session.status,
-            "turns_remaining": session.max_turns - session.turn_count
+            "session_status": updated_session.status,
+            "turns_remaining": updated_session.max_turns - updated_session.turn_count,
+            "session": updated_session.to_dict()
         }
     else:
         raise HTTPException(status_code=400, detail=f"Mode '{mode_id}' does not support interactive turns")
