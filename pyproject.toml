@@ -13,6 +13,7 @@ dependencies = [
     "ddgs>=8.0.0",
     "yake>=0.4.8",
     "portalocker>=3.2.0",
+    "neo4j>=6.0.3",
 ]
 
 [project.optional-dependencies]
