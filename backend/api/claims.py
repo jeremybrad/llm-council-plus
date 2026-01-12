@@ -29,6 +29,7 @@ from ..claims import (
     Evidence as EvidenceDataclass,
     Claim as ClaimDataclass,
 )
+from ..adjudicator import adjudicate_claim, AdjudicationResult
 from ..evidence import search_evidence, get_sadb_status
 from ..scorer import classify_support
 
@@ -74,6 +75,30 @@ class AddEvidenceRequest(BaseModel):
     span_start: Optional[int] = None
     span_end: Optional[int] = None
     source_hash: Optional[str] = None
+
+
+class AdjudicateRequest(BaseModel):
+    """Request body for panel adjudication."""
+
+    models: Optional[List[str]] = Field(
+        None,
+        description="Model IDs for panel (e.g., ['ollama:llama3.2', 'ollama:mistral']). Uses council_models if not provided.",
+    )
+    panel_size: int = Field(
+        default=3,
+        ge=1,
+        le=7,
+        description="Number of panel members (1-7)",
+    )
+    mode: str = Field(
+        default="strict",
+        pattern="^(strict|lenient)$",
+        description="strict requires higher consensus for status update",
+    )
+    update_status: bool = Field(
+        default=False,
+        description="If true, update claim status based on strong consensus",
+    )
 
 
 # =============================================================================
@@ -228,6 +253,33 @@ class ValidateResponse(BaseModel):
     evidence_added: int
     old_confidence: float
     new_confidence: float
+    claim: Optional[ClaimResponse] = None
+
+
+class PanelVerdictResponse(BaseModel):
+    """Single panel member's verdict."""
+
+    model: str
+    verdict: str
+    confidence: float
+    reasoning: str
+    cited_evidence: List[str]
+    concerns: List[str]
+    error: Optional[str] = None
+
+
+class AdjudicateResponse(BaseModel):
+    """Response from panel adjudication."""
+
+    claim_id: str
+    panel_size: int
+    mode: str
+    panel_verdicts: List[PanelVerdictResponse]
+    consensus_verdict: str
+    consensus_confidence: float
+    timestamp: str
+    status_updated: bool
+    new_status: Optional[str] = None
     claim: Optional[ClaimResponse] = None
 
 
@@ -480,4 +532,64 @@ async def validate_claim(claim_id: str):
         old_confidence=old_confidence,
         new_confidence=updated.confidence,
         claim=ClaimResponse.from_dataclass(updated, include_evidence=True),
+    )
+
+
+@router.post("/{claim_id}/adjudicate", response_model=AdjudicateResponse)
+async def adjudicate_claim_endpoint(claim_id: str, request: AdjudicateRequest):
+    """Run panel adjudication on a claim.
+
+    A panel of LLMs evaluates the claim against its evidence and returns
+    a consensus verdict. Each panel member must cite only existing evidence IDs.
+
+    Verdicts:
+    - accept: Evidence strongly supports the claim
+    - dispute: Evidence contradicts the claim
+    - insufficient: Not enough evidence to determine
+    - abstain: Unable to evaluate
+
+    If update_status=true and consensus is strong enough:
+    - strict mode: requires ≥70% confidence
+    - lenient mode: requires ≥50% confidence
+    """
+    existing = get_claim(claim_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found")
+
+    try:
+        result = await adjudicate_claim(
+            claim_id=claim_id,
+            models=request.models,
+            panel_size=request.panel_size,
+            mode=request.mode,
+            update_status=request.update_status,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Get updated claim for response
+    updated_claim = get_claim(claim_id)
+
+    return AdjudicateResponse(
+        claim_id=result.claim_id,
+        panel_size=result.panel_size,
+        mode=result.mode,
+        panel_verdicts=[
+            PanelVerdictResponse(
+                model=v.model,
+                verdict=v.verdict,
+                confidence=v.confidence,
+                reasoning=v.reasoning,
+                cited_evidence=v.cited_evidence,
+                concerns=v.concerns,
+                error=v.error,
+            )
+            for v in result.panel_verdicts
+        ],
+        consensus_verdict=result.consensus_verdict,
+        consensus_confidence=result.consensus_confidence,
+        timestamp=result.timestamp,
+        status_updated=result.status_updated,
+        new_status=result.new_status,
+        claim=ClaimResponse.from_dataclass(updated_claim, include_evidence=True, include_history=True),
     )

@@ -609,3 +609,151 @@ class TestResponseShaping:
         assert "base_score" in data["score_breakdown"]
         assert "final_score" in data["score_breakdown"]
         assert "cap_applied" in data["score_breakdown"]
+
+
+# =============================================================================
+# POST /api/claims/{claim_id}/adjudicate - Panel Adjudication
+# =============================================================================
+
+
+class TestAdjudicateClaim:
+    """Tests for POST /api/claims/{claim_id}/adjudicate endpoint."""
+
+    def test_adjudicate_claim_not_found(self, client):
+        """Non-existent claim returns 404."""
+        response = client.post(
+            "/api/claims/nonexistent-id/adjudicate",
+            json={"models": ["mock:model"], "panel_size": 1},
+        )
+        assert response.status_code == 404
+
+    def test_adjudicate_claim_success(self, client, sample_claim_with_evidence):
+        """Successful adjudication returns panel verdicts."""
+        import json as json_module
+
+        mock_response = {
+            "content": json_module.dumps({
+                "verdict": "accept",
+                "confidence": 0.85,
+                "reasoning": "Evidence supports the claim",
+                "cited_evidence": ["ev_test_001"],
+                "concerns": [],
+            })
+        }
+
+        with patch("backend.adjudicator.query_model") as mock_query:
+            # Make it async
+            import asyncio
+            async def async_return(*args, **kwargs):
+                return mock_response
+            mock_query.side_effect = async_return
+
+            response = client.post(
+                f"/api/claims/{sample_claim_with_evidence}/adjudicate",
+                json={"models": ["mock:model1", "mock:model2"], "panel_size": 2},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["claim_id"] == sample_claim_with_evidence
+            assert data["panel_size"] == 2
+            assert len(data["panel_verdicts"]) == 2
+            assert data["consensus_verdict"] == "accept"
+            assert "claim" in data
+
+    def test_adjudicate_claim_invalid_mode(self, client, sample_claim):
+        """Invalid mode returns 422."""
+        response = client.post(
+            f"/api/claims/{sample_claim.claim_id}/adjudicate",
+            json={"mode": "invalid_mode"},
+        )
+        assert response.status_code == 422
+
+    def test_adjudicate_claim_panel_size_validation(self, client, sample_claim):
+        """Panel size outside range returns 422."""
+        response = client.post(
+            f"/api/claims/{sample_claim.claim_id}/adjudicate",
+            json={"panel_size": 10},  # Max is 7
+        )
+        assert response.status_code == 422
+
+    def test_adjudicate_claim_no_models_configured(self, client, sample_claim):
+        """Returns 422 when no models available."""
+        with patch("backend.adjudicator.get_settings") as mock_settings:
+            mock_settings.return_value = {"council_models": []}
+
+            response = client.post(
+                f"/api/claims/{sample_claim.claim_id}/adjudicate",
+                json={},  # No models provided, and settings has none
+            )
+            assert response.status_code == 422
+            assert "No models" in response.json()["detail"]
+
+    def test_adjudicate_claim_with_status_update(self, client, sample_claim_with_evidence):
+        """Adjudication can update claim status."""
+        import json as json_module
+
+        mock_response = {
+            "content": json_module.dumps({
+                "verdict": "accept",
+                "confidence": 0.9,
+                "reasoning": "Strong evidence",
+                "cited_evidence": ["ev_test_001"],
+                "concerns": [],
+            })
+        }
+
+        with patch("backend.adjudicator.query_model") as mock_query:
+            import asyncio
+            async def async_return(*args, **kwargs):
+                return mock_response
+            mock_query.side_effect = async_return
+
+            response = client.post(
+                f"/api/claims/{sample_claim_with_evidence}/adjudicate",
+                json={
+                    "models": ["mock:model1", "mock:model2"],
+                    "panel_size": 2,
+                    "update_status": True,
+                },
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status_updated"] is True
+            assert data["new_status"] == "accepted"
+            assert data["claim"]["status"] == "accepted"
+
+    def test_adjudicate_records_in_history(self, client, sample_claim_with_evidence):
+        """Adjudication is recorded in claim history."""
+        import json as json_module
+
+        mock_response = {
+            "content": json_module.dumps({
+                "verdict": "insufficient",
+                "confidence": 0.4,
+                "reasoning": "Not enough evidence",
+                "cited_evidence": [],
+                "concerns": ["Need more sources"],
+            })
+        }
+
+        with patch("backend.adjudicator.query_model") as mock_query:
+            import asyncio
+            async def async_return(*args, **kwargs):
+                return mock_response
+            mock_query.side_effect = async_return
+
+            response = client.post(
+                f"/api/claims/{sample_claim_with_evidence}/adjudicate",
+                json={"models": ["mock:model"], "panel_size": 1},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Check history contains adjudication event
+            history = data["claim"]["review_history"]
+            adj_events = [h for h in history if h.get("event") == "panel_adjudication"]
+            assert len(adj_events) == 1
+            assert adj_events[0]["consensus_verdict"] == "insufficient"
