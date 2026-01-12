@@ -143,6 +143,100 @@ class TestListClaims:
         assert len(data["items"]) == 2
         assert data["offset"] == 2
 
+    def test_list_claims_sort_by_confidence_desc(self, client):
+        """Sort by confidence descending (default order)."""
+        # Create claims with different confidence via evidence
+        claim1 = add_claim("Low confidence claim", "preference")
+        claim2 = add_claim("High confidence claim", "preference")
+
+        # Add evidence to claim2 to increase confidence
+        add_evidence(
+            claim2.claim_id,
+            Evidence(
+                evidence_id="ev_sort_001",
+                source_type="transcript",
+                source_id="conv_sort",
+                quote="Test quote for sorting",
+                support="supports",
+                weight=0.9,
+                retrieved_at="2026-01-01T00:00:00Z",
+                retrieval_query="test",
+            ),
+        )
+
+        response = client.get("/api/claims?sort=confidence&order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        # Higher confidence should come first
+        assert data["items"][0]["claim_id"] == claim2.claim_id
+
+    def test_list_claims_sort_by_confidence_asc(self, client):
+        """Sort by confidence ascending."""
+        claim1 = add_claim("Low confidence claim", "preference")
+        claim2 = add_claim("High confidence claim", "preference")
+
+        add_evidence(
+            claim2.claim_id,
+            Evidence(
+                evidence_id="ev_sort_002",
+                source_type="transcript",
+                source_id="conv_sort",
+                quote="Test quote",
+                support="supports",
+                weight=0.9,
+                retrieved_at="2026-01-01T00:00:00Z",
+                retrieval_query="test",
+            ),
+        )
+
+        response = client.get("/api/claims?sort=confidence&order=asc")
+        assert response.status_code == 200
+        data = response.json()
+        # Lower confidence should come first
+        assert data["items"][0]["claim_id"] == claim1.claim_id
+
+    def test_list_claims_sort_by_created_at(self, client):
+        """Sort by created_at."""
+        import time
+        claim1 = add_claim("First claim", "preference")
+        time.sleep(0.01)  # Ensure different timestamps
+        claim2 = add_claim("Second claim", "preference")
+
+        response = client.get("/api/claims?sort=created_at&order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        # Most recent should come first
+        assert data["items"][0]["claim_id"] == claim2.claim_id
+
+        response = client.get("/api/claims?sort=created_at&order=asc")
+        data = response.json()
+        # Oldest should come first
+        assert data["items"][0]["claim_id"] == claim1.claim_id
+
+    def test_list_claims_sort_by_claim_text(self, client):
+        """Sort by claim_text alphabetically."""
+        claim_z = add_claim("Zebra claim", "preference")
+        claim_a = add_claim("Apple claim", "preference")
+
+        response = client.get("/api/claims?sort=claim_text&order=asc")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"][0]["claim_text"] == "Apple claim"
+
+        response = client.get("/api/claims?sort=claim_text&order=desc")
+        data = response.json()
+        assert data["items"][0]["claim_text"] == "Zebra claim"
+
+    def test_list_claims_sort_invalid_field(self, client):
+        """Invalid sort field returns 422."""
+        response = client.get("/api/claims?sort=invalid_field")
+        assert response.status_code == 422
+
+    def test_list_claims_sort_invalid_order(self, client):
+        """Invalid order returns 422."""
+        response = client.get("/api/claims?sort=confidence&order=invalid")
+        assert response.status_code == 422
+
     def test_list_claims_include_evidence(self, client, sample_claim_with_evidence):
         """Include evidence array when requested."""
         response = client.get("/api/claims?include_evidence=true")

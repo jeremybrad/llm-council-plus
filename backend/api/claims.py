@@ -295,13 +295,19 @@ async def list_claims(
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
     valid_at: Optional[str] = Query(None, description="ISO timestamp for temporal filtering"),
     q: Optional[str] = Query(None, max_length=200, description="Substring search on claim_text"),
+    sort: Optional[str] = Query(
+        None,
+        pattern="^(created_at|last_reviewed_at|confidence|claim_text|status|evidence_count)$",
+        description="Field to sort by",
+    ),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     include_evidence: bool = Query(False),
     include_history: bool = Query(False),
     quote_max_len: int = Query(280, ge=50, le=2000),
 ):
-    """List claims with optional filters and pagination.
+    """List claims with optional filters, sorting, and pagination.
 
     Query parameters:
     - status: Filter by claim status
@@ -309,6 +315,8 @@ async def list_claims(
     - min_confidence: Filter by minimum confidence score
     - valid_at: Filter by temporal validity at given ISO timestamp
     - q: Substring search on claim_text
+    - sort: Field to sort by (created_at, last_reviewed_at, confidence, claim_text, status, evidence_count)
+    - order: Sort order (asc, desc) - default desc
     - limit: Max results (default 50, max 200)
     - offset: Skip first N results
     - include_evidence: Include evidence array (default false)
@@ -327,6 +335,21 @@ async def list_claims(
     if q:
         q_lower = q.lower()
         claims = [c for c in claims if q_lower in c.claim_text.lower()]
+
+    # Apply sorting if requested
+    if sort:
+        reverse = order == "desc"
+
+        def get_sort_key(claim):
+            if sort == "evidence_count":
+                return len(claim.evidence)
+            value = getattr(claim, sort, None)
+            # Handle None values - sort them last
+            if value is None:
+                return "" if isinstance(value, str) else 0
+            return value
+
+        claims = sorted(claims, key=get_sort_key, reverse=reverse)
 
     # Get total before pagination
     total = len(claims)
