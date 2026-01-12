@@ -11,6 +11,7 @@ knowledge base (C003_sadb_canonical). Key features:
 
 import asyncio
 import hashlib
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -20,8 +21,14 @@ from typing import List, Optional
 from .claims import Evidence
 
 
-# Path to SADB CLI module
-SADB_CLI_PATH = Path.home() / "SyncedProjects/C003_sadb_canonical/50_cli"
+# Path to SADB CLI module - configurable via environment variable
+# Defaults to ~/SyncedProjects/C003_sadb_canonical/50_cli if not set
+SADB_CLI_PATH = Path(
+    os.environ.get(
+        "SADB_CLI_PATH",
+        str(Path.home() / "SyncedProjects/C003_sadb_canonical/50_cli")
+    )
+)
 
 
 def _check_sadb_available() -> bool:
