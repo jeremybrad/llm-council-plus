@@ -7,7 +7,7 @@ All jobs must inherit from BaseJob and implement:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,24 +63,24 @@ class JobResult:
 
     def mark_completed(self) -> None:
         """Mark job as completed."""
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(timezone.utc)
         self.status = JobStatus.COMPLETED
 
     def mark_failed(self, error: str) -> None:
         """Mark job as failed."""
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(timezone.utc)
         self.status = JobStatus.FAILED
         self.errors.append(error)
 
     def mark_aborted(self, reason: str) -> None:
         """Mark job as aborted."""
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(timezone.utc)
         self.status = JobStatus.ABORTED
         self.errors.append(f"Aborted: {reason}")
 
     def mark_budget_exceeded(self, reason: str) -> None:
         """Mark job as stopped due to budget limit."""
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(timezone.utc)
         self.status = JobStatus.BUDGET_EXCEEDED
         self.errors.append(f"Budget exceeded: {reason}")
 

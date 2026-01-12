@@ -316,7 +316,9 @@ class TruthValidationJob(BaseJob):
                     "reason": reason,
                     "old_confidence": old_confidence,
                     "new_confidence": new_confidence,
+                    "source": "nightshift_truth_validation",
                 },
+                force=True,  # Batch job has its own validation logic
             )
             return {
                 "type": "disputed",

@@ -198,6 +198,7 @@ def main() -> int:
     """
     # Import jobs to register them
     from .jobs import repo_docs_refresh  # noqa: F401
+    from .jobs import truth_validation  # noqa: F401
 
     parser = create_parser()
     args = parser.parse_args()
