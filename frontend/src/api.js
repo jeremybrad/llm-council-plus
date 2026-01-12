@@ -302,7 +302,8 @@ export const api = {
     if (!response.ok) {
       throw new Error('Failed to list modes');
     }
-    return response.json();
+    const data = await response.json();
+    return data.modes || [];
   },
 
   /**
