@@ -16,15 +16,14 @@ import json
 import os
 import tempfile
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import portalocker
 
 from .scorer import ScoreBreakdown, calculate_confidence_with_breakdown
-
 
 # =============================================================================
 # Status Transition Rules
@@ -35,11 +34,11 @@ VALID_STATUSES = {"candidate", "accepted", "disputed", "deprecated"}
 
 # Transition thresholds (configurable)
 TRANSITION_RULES = {
-    "accept_min_confidence": 0.7,       # Min confidence to accept
-    "accept_min_supporting": 1,         # Min supporting evidence to accept
+    "accept_min_confidence": 0.7,  # Min confidence to accept
+    "accept_min_supporting": 1,  # Min supporting evidence to accept
     "accept_max_contradiction_weight": 0.6,  # Max weight of contradictions allowed
     "dispute_min_contradiction_weight": 0.5,  # Min weight to trigger dispute
-    "reaccept_min_confidence": 0.8,     # Higher bar to re-accept after dispute
+    "reaccept_min_confidence": 0.8,  # Higher bar to re-accept after dispute
 }
 
 
@@ -57,7 +56,7 @@ def validate_status_transition(
     claim: "Claim",
     new_status: str,
     force: bool = False,
-) -> Optional[str]:
+) -> str | None:
     """Validate a status transition against rules.
 
     Args:
@@ -173,6 +172,7 @@ class Evidence:
         span_end: Character offset end (optional)
         source_hash: SHA256 prefix of source content for drift detection (optional)
     """
+
     evidence_id: str
     source_type: str
     source_id: str
@@ -181,9 +181,9 @@ class Evidence:
     weight: float
     retrieved_at: str
     retrieval_query: str
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
-    source_hash: Optional[str] = None
+    span_start: int | None = None
+    span_end: int | None = None
+    source_hash: str | None = None
 
     @property
     def independence_key(self) -> str:
@@ -206,12 +206,12 @@ class Evidence:
         qh = hashlib.sha256(self.quote.encode("utf-8")).hexdigest()[:16]
         return f"{self.source_type}:{self.source_id}:{span}:{qh}"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Evidence":
+    def from_dict(cls, data: dict[str, Any]) -> "Evidence":
         """Create from dictionary."""
         return cls(**data)
 
@@ -241,21 +241,22 @@ class Claim:
         last_reviewed_at: Last time evidence was added or claim reviewed
         review_history: Full audit log of all changes
     """
+
     claim_id: str
     claim_text: str
     claim_type: str
     confidence: float
     status: str
-    evidence: List[Evidence]
-    as_of: Optional[str]
-    valid_from: Optional[str]
-    valid_until: Optional[str]
-    score_breakdown: Optional[ScoreBreakdown]
+    evidence: list[Evidence]
+    as_of: str | None
+    valid_from: str | None
+    valid_until: str | None
+    score_breakdown: ScoreBreakdown | None
     created_at: str
-    last_reviewed_at: Optional[str]
-    review_history: List[Dict[str, Any]] = field(default_factory=list)
+    last_reviewed_at: str | None
+    review_history: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "claim_id": self.claim_id,
@@ -274,7 +275,7 @@ class Claim:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Claim":
+    def from_dict(cls, data: dict[str, Any]) -> "Claim":
         """Create from dictionary."""
         evidence = [Evidence.from_dict(e) for e in data.get("evidence", [])]
         score_breakdown = None
@@ -304,7 +305,7 @@ def _ensure_dirs() -> None:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _save_claims(claims: Dict[str, Claim]) -> None:
+def _save_claims(claims: dict[str, Claim]) -> None:
     """Atomic write with cross-platform file locking for crash safety.
 
     Uses portalocker for Windows/Mac/Linux compatibility.
@@ -313,16 +314,12 @@ def _save_claims(claims: Dict[str, Claim]) -> None:
     _ensure_dirs()
 
     # Acquire exclusive lock
-    with portalocker.Lock(str(LOCK_FILE), timeout=10, mode='w'):
+    with portalocker.Lock(str(LOCK_FILE), timeout=10, mode="w"):
         # Write to temp file in same directory (ensures same filesystem)
         fd, tmp_path = tempfile.mkstemp(dir=CLAIMS_DIR, suffix=".tmp")
         try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(
-                    {k: v.to_dict() for k, v in claims.items()},
-                    f,
-                    indent=2
-                )
+            with os.fdopen(fd, "w") as f:
+                json.dump({k: v.to_dict() for k, v in claims.items()}, f, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
             # Atomic rename
@@ -333,26 +330,26 @@ def _save_claims(claims: Dict[str, Claim]) -> None:
             raise
 
 
-def _load_claims() -> Dict[str, Claim]:
+def _load_claims() -> dict[str, Claim]:
     """Load claims with shared lock."""
     _ensure_dirs()
 
     if not CLAIMS_FILE.exists():
         return {}
 
-    with portalocker.Lock(str(LOCK_FILE), timeout=10, mode='r'):
+    with portalocker.Lock(str(LOCK_FILE), timeout=10, mode="r"):
         with open(CLAIMS_FILE) as f:
             data = json.load(f)
         return {k: Claim.from_dict(v) for k, v in data.items()}
 
 
-def _log_to_history(event: Dict[str, Any]) -> None:
+def _log_to_history(event: dict[str, Any]) -> None:
     """Append an event to today's history log."""
     _ensure_dirs()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     history_file = HISTORY_DIR / f"{today}.jsonl"
 
-    with open(history_file, 'a') as f:
+    with open(history_file, "a") as f:
         f.write(json.dumps(event) + "\n")
 
 
@@ -377,10 +374,11 @@ def _is_valid_at(claim: Claim, timestamp: str) -> bool:
 # Public API
 # =============================================================================
 
+
 def add_claim(
     claim_text: str,
     claim_type: str,
-    as_of: Optional[str] = None,
+    as_of: str | None = None,
 ) -> Claim:
     """Create a new candidate claim with stable UUID.
 
@@ -408,29 +406,33 @@ def add_claim(
         score_breakdown=None,
         created_at=now,
         last_reviewed_at=None,
-        review_history=[{
-            "event": "claim_created",
-            "timestamp": now,
-            "claim_type": claim_type,
-        }],
+        review_history=[
+            {
+                "event": "claim_created",
+                "timestamp": now,
+                "claim_type": claim_type,
+            }
+        ],
     )
 
     claims = _load_claims()
     claims[claim.claim_id] = claim
     _save_claims(claims)
 
-    _log_to_history({
-        "event": "claim_created",
-        "timestamp": now,
-        "claim_id": claim.claim_id,
-        "claim_text": claim_text[:100],
-        "claim_type": claim_type,
-    })
+    _log_to_history(
+        {
+            "event": "claim_created",
+            "timestamp": now,
+            "claim_id": claim.claim_id,
+            "claim_text": claim_text[:100],
+            "claim_type": claim_type,
+        }
+    )
 
     return claim
 
 
-def get_claim(claim_id: str) -> Optional[Claim]:
+def get_claim(claim_id: str) -> Claim | None:
     """Retrieve a claim by ID.
 
     Args:
@@ -444,11 +446,11 @@ def get_claim(claim_id: str) -> Optional[Claim]:
 
 
 def query_claims(
-    status: Optional[str] = None,
-    claim_type: Optional[str] = None,
-    min_confidence: Optional[float] = None,
-    valid_at: Optional[str] = None,
-) -> List[Claim]:
+    status: str | None = None,
+    claim_type: str | None = None,
+    min_confidence: float | None = None,
+    valid_at: str | None = None,
+) -> list[Claim]:
     """Query claims with optional filters.
 
     Args:
@@ -507,14 +509,16 @@ def add_evidence(claim_id: str, evidence: Evidence) -> Claim:
         claim.evidence.append(evidence)
 
         # Log to review_history
-        claim.review_history.append({
-            "event": "evidence_added",
-            "timestamp": now,
-            "evidence_id": evidence.evidence_id,
-            "source_type": evidence.source_type,
-            "support": evidence.support,
-            "weight": evidence.weight,
-        })
+        claim.review_history.append(
+            {
+                "event": "evidence_added",
+                "timestamp": now,
+                "evidence_id": evidence.evidence_id,
+                "source_type": evidence.source_type,
+                "support": evidence.support,
+                "weight": evidence.weight,
+            }
+        )
 
     # Recalculate confidence with breakdown
     claim.confidence, claim.score_breakdown = calculate_confidence_with_breakdown(claim.evidence)
@@ -522,33 +526,37 @@ def add_evidence(claim_id: str, evidence: Evidence) -> Claim:
 
     # Log confidence change if significant
     if abs(claim.confidence - old_confidence) > 0.01:
-        claim.review_history.append({
-            "event": "confidence_updated",
-            "timestamp": now,
-            "old_confidence": old_confidence,
-            "new_confidence": claim.confidence,
-            "score_breakdown": claim.score_breakdown.to_dict() if claim.score_breakdown else None,
-        })
+        claim.review_history.append(
+            {
+                "event": "confidence_updated",
+                "timestamp": now,
+                "old_confidence": old_confidence,
+                "new_confidence": claim.confidence,
+                "score_breakdown": claim.score_breakdown.to_dict() if claim.score_breakdown else None,
+            }
+        )
 
     claims[claim_id] = claim
     _save_claims(claims)
 
-    _log_to_history({
-        "event": "evidence_added",
-        "timestamp": now,
-        "claim_id": claim_id,
-        "evidence_id": evidence.evidence_id,
-        "support": evidence.support,
-        "old_confidence": old_confidence,
-        "new_confidence": claim.confidence,
-    })
+    _log_to_history(
+        {
+            "event": "evidence_added",
+            "timestamp": now,
+            "claim_id": claim_id,
+            "evidence_id": evidence.evidence_id,
+            "support": evidence.support,
+            "old_confidence": old_confidence,
+            "new_confidence": claim.confidence,
+        }
+    )
 
     return claim
 
 
 def update_claim(
     claim_id: str,
-    review_history_event: Optional[Dict[str, Any]] = None,
+    review_history_event: dict[str, Any] | None = None,
     force: bool = False,
     **kwargs,
 ) -> Claim:
@@ -576,13 +584,13 @@ def update_claim(
     old_status = claim.status
 
     # Validate status transition if status is being changed
-    if 'status' in kwargs and kwargs['status'] != old_status:
-        error = validate_status_transition(claim, kwargs['status'], force=force)
+    if "status" in kwargs and kwargs["status"] != old_status:
+        error = validate_status_transition(claim, kwargs["status"], force=force)
         if error:
             raise StatusTransitionError(
                 f"Cannot transition from '{old_status}' to '{kwargs['status']}': {error}",
                 current_status=old_status,
-                target_status=kwargs['status'],
+                target_status=kwargs["status"],
                 reason=error,
             )
 
@@ -592,22 +600,26 @@ def update_claim(
             setattr(claim, key, value)
 
     # Log status change if it happened
-    if 'status' in kwargs and kwargs['status'] != old_status:
-        claim.review_history.append({
-            "event": "status_changed",
-            "timestamp": now,
-            "old_status": old_status,
-            "new_status": kwargs['status'],
-            "forced": force,
-        })
-        _log_to_history({
-            "event": "status_changed",
-            "timestamp": now,
-            "claim_id": claim_id,
-            "old_status": old_status,
-            "new_status": kwargs['status'],
-            "forced": force,
-        })
+    if "status" in kwargs and kwargs["status"] != old_status:
+        claim.review_history.append(
+            {
+                "event": "status_changed",
+                "timestamp": now,
+                "old_status": old_status,
+                "new_status": kwargs["status"],
+                "forced": force,
+            }
+        )
+        _log_to_history(
+            {
+                "event": "status_changed",
+                "timestamp": now,
+                "claim_id": claim_id,
+                "old_status": old_status,
+                "new_status": kwargs["status"],
+                "forced": force,
+            }
+        )
 
     # Append custom review history event if provided
     if review_history_event:
@@ -634,8 +646,8 @@ def archive_claim(claim_id: str) -> Claim:
 
 def get_claims_for_review(
     n: int = 5,
-    band: Tuple[float, float] = (0.60, 0.98),
-) -> List[Claim]:
+    band: tuple[float, float] = (0.60, 0.98),
+) -> list[Claim]:
     """Select claims in confidence band for validation.
 
     Prioritizes claims that have never been reviewed or were reviewed
@@ -663,7 +675,7 @@ def get_claims_for_review(
     return in_band[:n]
 
 
-def get_all_claims() -> List[Claim]:
+def get_all_claims() -> list[Claim]:
     """Get all claims in the store.
 
     Returns:
@@ -689,11 +701,13 @@ def delete_claim(claim_id: str) -> bool:
     del claims[claim_id]
     _save_claims(claims)
 
-    _log_to_history({
-        "event": "claim_deleted",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "claim_id": claim_id,
-    })
+    _log_to_history(
+        {
+            "event": "claim_deleted",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "claim_id": claim_id,
+        }
+    )
 
     return True
 
@@ -711,9 +725,9 @@ def clear_all_claims() -> int:
 
 
 def import_claim(
-    claim_data: Dict[str, Any],
+    claim_data: dict[str, Any],
     on_duplicate: str = "skip",
-) -> tuple[Optional[Claim], str]:
+) -> tuple[Claim | None, str]:
     """Import a claim from export data.
 
     Args:
@@ -745,19 +759,21 @@ def import_claim(
     # Build Evidence objects
     evidence_list = []
     for ev_data in claim_data.get("evidence", []):
-        evidence_list.append(Evidence(
-            evidence_id=ev_data["evidence_id"],
-            source_type=ev_data["source_type"],
-            source_id=ev_data["source_id"],
-            quote=ev_data["quote"],
-            support=ev_data["support"],
-            weight=ev_data["weight"],
-            retrieved_at=ev_data.get("retrieved_at", now),
-            retrieval_query=ev_data.get("retrieval_query", "import"),
-            span_start=ev_data.get("span_start"),
-            span_end=ev_data.get("span_end"),
-            source_hash=ev_data.get("source_hash"),
-        ))
+        evidence_list.append(
+            Evidence(
+                evidence_id=ev_data["evidence_id"],
+                source_type=ev_data["source_type"],
+                source_id=ev_data["source_id"],
+                quote=ev_data["quote"],
+                support=ev_data["support"],
+                weight=ev_data["weight"],
+                retrieved_at=ev_data.get("retrieved_at", now),
+                retrieval_query=ev_data.get("retrieval_query", "import"),
+                span_start=ev_data.get("span_start"),
+                span_end=ev_data.get("span_end"),
+                source_hash=ev_data.get("source_hash"),
+            )
+        )
 
     # Build ScoreBreakdown if present
     score_breakdown = None
@@ -809,11 +825,13 @@ def import_claim(
     claims[claim_id] = claim
     _save_claims(claims)
 
-    _log_to_history({
-        "event": "claim_imported",
-        "timestamp": now,
-        "claim_id": claim_id,
-        "status": status,
-    })
+    _log_to_history(
+        {
+            "event": "claim_imported",
+            "timestamp": now,
+            "claim_id": claim_id,
+            "status": status,
+        }
+    )
 
     return claim, status

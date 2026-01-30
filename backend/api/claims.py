@@ -17,28 +17,30 @@ Endpoints:
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
+from ..adjudicator import adjudicate_claim
 from ..claims import (
+    TRANSITION_RULES,
+    StatusTransitionError,
     add_claim,
+    add_evidence,
     get_claim,
+    import_claim,
     query_claims,
     update_claim,
-    add_evidence,
-    get_all_claims,
-    import_claim,
-    Evidence as EvidenceDataclass,
-    Claim as ClaimDataclass,
-    StatusTransitionError,
-    TRANSITION_RULES,
 )
-from ..adjudicator import adjudicate_claim, AdjudicationResult
-from ..evidence import search_evidence, get_sadb_status
+from ..claims import (
+    Claim as ClaimDataclass,
+)
+from ..claims import (
+    Evidence as EvidenceDataclass,
+)
+from ..evidence import get_sadb_status, search_evidence
 from ..scorer import classify_support
-
 
 router = APIRouter(prefix="/api/claims", tags=["claims"])
 
@@ -53,19 +55,19 @@ class CreateClaimRequest(BaseModel):
 
     claim_text: str = Field(..., min_length=1, max_length=2000)
     claim_type: str = Field(..., pattern="^(biographical|preference|belief|event|relationship|project)$")
-    as_of: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
+    as_of: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
 
 
 class UpdateClaimRequest(BaseModel):
     """Request body for updating a claim."""
 
-    status: Optional[str] = Field(None, pattern="^(candidate|accepted|disputed|deprecated)$")
-    as_of: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
-    note: Optional[str] = Field(None, max_length=500, description="Reason for update, stored in review_history")
+    status: str | None = Field(None, pattern="^(candidate|accepted|disputed|deprecated)$")
+    as_of: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    note: str | None = Field(None, max_length=500, description="Reason for update, stored in review_history")
     force: bool = Field(False, description="Force status transition, bypassing validation rules (admin override)")
 
 
@@ -78,16 +80,16 @@ class AddEvidenceRequest(BaseModel):
     support: str = Field(..., pattern="^(supports|contradicts|neutral)$")
     weight: float = Field(..., ge=0.0, le=1.0)
     retrieval_query: str = Field(default="manual", max_length=500)
-    retrieved_at: Optional[str] = None
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
-    source_hash: Optional[str] = None
+    retrieved_at: str | None = None
+    span_start: int | None = None
+    span_end: int | None = None
+    source_hash: str | None = None
 
 
 class AdjudicateRequest(BaseModel):
     """Request body for panel adjudication."""
 
-    models: Optional[List[str]] = Field(
+    models: list[str] | None = Field(
         None,
         description="Model IDs for panel (e.g., ['ollama:llama3.2', 'ollama:mistral']). Uses council_models if not provided.",
     )
@@ -121,7 +123,7 @@ class ScoreBreakdownResponse(BaseModel):
     independence_bonus: float
     contradiction_penalty: float
     final_score: float
-    evidence_ids_used: List[str]
+    evidence_ids_used: list[str]
     calculation_timestamp: str
     cap_applied: float
     cap_reason: str
@@ -138,9 +140,9 @@ class EvidenceResponse(BaseModel):
     weight: float
     retrieved_at: str
     retrieval_query: str
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
-    source_hash: Optional[str] = None
+    span_start: int | None = None
+    span_end: int | None = None
+    source_hash: str | None = None
 
     @classmethod
     def from_dataclass(
@@ -177,16 +179,16 @@ class ClaimResponse(BaseModel):
     confidence: float
     status: str
     evidence_count: int
-    as_of: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
-    score_breakdown: Optional[ScoreBreakdownResponse] = None
+    as_of: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    score_breakdown: ScoreBreakdownResponse | None = None
     created_at: str
-    last_reviewed_at: Optional[str] = None
+    last_reviewed_at: str | None = None
 
     # Optional fields (controlled by include_* params)
-    evidence: Optional[List[EvidenceResponse]] = None
-    review_history: Optional[List[Dict[str, Any]]] = None
+    evidence: list[EvidenceResponse] | None = None
+    review_history: list[dict[str, Any]] | None = None
 
     @classmethod
     def from_dataclass(
@@ -215,10 +217,7 @@ class ClaimResponse(BaseModel):
         # Build evidence list if requested
         evidence = None
         if include_evidence:
-            evidence = [
-                EvidenceResponse.from_dataclass(e, quote_max_len=quote_max_len)
-                for e in claim.evidence
-            ]
+            evidence = [EvidenceResponse.from_dataclass(e, quote_max_len=quote_max_len) for e in claim.evidence]
 
         # Build history if requested
         review_history = None
@@ -246,7 +245,7 @@ class ClaimResponse(BaseModel):
 class ClaimsListResponse(BaseModel):
     """Paginated list of claims."""
 
-    items: List[ClaimResponse]
+    items: list[ClaimResponse]
     total: int
     limit: int
     offset: int
@@ -258,11 +257,11 @@ class ValidateResponse(BaseModel):
     claim_id: str
     sadb_importable: bool  # SADB module can be imported
     sadb_ready: bool  # All checks pass (import + driver + connectivity)
-    sadb_error: Optional[str] = None  # First error encountered (if any)
+    sadb_error: str | None = None  # First error encountered (if any)
     evidence_added: int
     old_confidence: float
     new_confidence: float
-    claim: Optional[ClaimResponse] = None
+    claim: ClaimResponse | None = None
 
 
 class PanelVerdictResponse(BaseModel):
@@ -272,9 +271,9 @@ class PanelVerdictResponse(BaseModel):
     verdict: str
     confidence: float
     reasoning: str
-    cited_evidence: List[str]
-    concerns: List[str]
-    error: Optional[str] = None
+    cited_evidence: list[str]
+    concerns: list[str]
+    error: str | None = None
 
 
 class AdjudicateResponse(BaseModel):
@@ -283,13 +282,13 @@ class AdjudicateResponse(BaseModel):
     claim_id: str
     panel_size: int
     mode: str
-    panel_verdicts: List[PanelVerdictResponse]
+    panel_verdicts: list[PanelVerdictResponse]
     consensus_verdict: str
     consensus_confidence: float
     timestamp: str
     status_updated: bool
-    new_status: Optional[str] = None
-    claim: Optional[ClaimResponse] = None
+    new_status: str | None = None
+    claim: ClaimResponse | None = None
 
 
 class ExportMetadata(BaseModel):
@@ -299,8 +298,8 @@ class ExportMetadata(BaseModel):
     format: str
     total_claims: int
     total_evidence: int
-    filters_applied: Dict[str, Any]
-    transition_rules: Dict[str, Any]
+    filters_applied: dict[str, Any]
+    transition_rules: dict[str, Any]
 
 
 class ExportClaimData(BaseModel):
@@ -311,14 +310,14 @@ class ExportClaimData(BaseModel):
     claim_type: str
     confidence: float
     status: str
-    as_of: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
+    as_of: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
     created_at: str
-    last_reviewed_at: Optional[str] = None
-    score_breakdown: Optional[ScoreBreakdownResponse] = None
-    evidence: List[EvidenceResponse]
-    review_history: List[Dict[str, Any]]
+    last_reviewed_at: str | None = None
+    score_breakdown: ScoreBreakdownResponse | None = None
+    evidence: list[EvidenceResponse]
+    review_history: list[dict[str, Any]]
 
     @classmethod
     def from_dataclass(cls, claim: ClaimDataclass) -> "ExportClaimData":
@@ -338,10 +337,7 @@ class ExportClaimData(BaseModel):
             )
 
         # Full quotes, no truncation
-        evidence = [
-            EvidenceResponse.from_dataclass(e, quote_max_len=10000)
-            for e in claim.evidence
-        ]
+        evidence = [EvidenceResponse.from_dataclass(e, quote_max_len=10000) for e in claim.evidence]
 
         return cls(
             claim_id=claim.claim_id,
@@ -364,7 +360,7 @@ class ExportBundleResponse(BaseModel):
     """Complete export bundle with metadata and claims."""
 
     metadata: ExportMetadata
-    claims: List[ExportClaimData]
+    claims: list[ExportClaimData]
 
 
 class ImportClaimData(BaseModel):
@@ -375,20 +371,20 @@ class ImportClaimData(BaseModel):
     claim_type: str = Field(..., pattern="^(biographical|preference|belief|event|relationship|project)$")
     confidence: float = Field(default=0.3, ge=0.0, le=1.0)
     status: str = Field(default="candidate", pattern="^(candidate|accepted|disputed|deprecated)$")
-    as_of: Optional[str] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
-    created_at: Optional[str] = None
-    last_reviewed_at: Optional[str] = None
-    score_breakdown: Optional[Dict[str, Any]] = None
-    evidence: List[Dict[str, Any]] = Field(default_factory=list)
-    review_history: List[Dict[str, Any]] = Field(default_factory=list)
+    as_of: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    created_at: str | None = None
+    last_reviewed_at: str | None = None
+    score_breakdown: dict[str, Any] | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    review_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ImportBundleRequest(BaseModel):
     """Request body for importing claims bundle."""
 
-    claims: List[ImportClaimData]
+    claims: list[ImportClaimData]
     on_duplicate: str = Field(
         default="skip",
         pattern="^(skip|overwrite|error)$",
@@ -401,7 +397,7 @@ class ImportResultItem(BaseModel):
 
     claim_id: str
     status: str  # "created", "skipped", "overwritten", "error"
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ImportBundleResponse(BaseModel):
@@ -413,7 +409,7 @@ class ImportBundleResponse(BaseModel):
     skipped: int
     overwritten: int
     errors: int
-    results: List[ImportResultItem]
+    results: list[ImportResultItem]
 
 
 # =============================================================================
@@ -423,12 +419,12 @@ class ImportBundleResponse(BaseModel):
 
 @router.get("", response_model=ClaimsListResponse)
 async def list_claims(
-    status: Optional[str] = Query(None, pattern="^(candidate|accepted|disputed|deprecated)$"),
-    claim_type: Optional[str] = Query(None, pattern="^(biographical|preference|belief|event|relationship|project)$"),
-    min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
-    valid_at: Optional[str] = Query(None, description="ISO timestamp for temporal filtering"),
-    q: Optional[str] = Query(None, max_length=200, description="Substring search on claim_text"),
-    sort: Optional[str] = Query(
+    status: str | None = Query(None, pattern="^(candidate|accepted|disputed|deprecated)$"),
+    claim_type: str | None = Query(None, pattern="^(biographical|preference|belief|event|relationship|project)$"),
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    valid_at: str | None = Query(None, description="ISO timestamp for temporal filtering"),
+    q: str | None = Query(None, max_length=200, description="Substring search on claim_text"),
+    sort: str | None = Query(
         None,
         pattern="^(created_at|last_reviewed_at|confidence|claim_text|status|evidence_count)$",
         description="Field to sort by",
@@ -511,11 +507,11 @@ async def list_claims(
 
 @router.get("/export", response_model=ExportBundleResponse)
 async def export_claims(
-    status: Optional[str] = Query(None, pattern="^(candidate|accepted|disputed|deprecated)$"),
-    claim_type: Optional[str] = Query(None, pattern="^(biographical|preference|belief|event|relationship|project)$"),
-    min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
-    valid_at: Optional[str] = Query(None, description="ISO timestamp for temporal filtering"),
-    q: Optional[str] = Query(None, max_length=200, description="Substring search on claim_text"),
+    status: str | None = Query(None, pattern="^(candidate|accepted|disputed|deprecated)$"),
+    claim_type: str | None = Query(None, pattern="^(biographical|preference|belief|event|relationship|project)$"),
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    valid_at: str | None = Query(None, description="ISO timestamp for temporal filtering"),
+    q: str | None = Query(None, max_length=200, description="Substring search on claim_text"),
 ):
     """Export claims bundle with full evidence and history.
 
@@ -611,11 +607,13 @@ async def import_claims(request: ImportBundleRequest):
 
             claim, status = import_claim(claim_dict, on_duplicate=request.on_duplicate)
 
-            results.append(ImportResultItem(
-                claim_id=claim_data.claim_id,
-                status=status,
-                error=None,
-            ))
+            results.append(
+                ImportResultItem(
+                    claim_id=claim_data.claim_id,
+                    status=status,
+                    error=None,
+                )
+            )
 
             if status == "created":
                 created += 1
@@ -626,19 +624,23 @@ async def import_claims(request: ImportBundleRequest):
 
         except ValueError as e:
             # on_duplicate="error" case
-            results.append(ImportResultItem(
-                claim_id=claim_data.claim_id,
-                status="error",
-                error=str(e),
-            ))
+            results.append(
+                ImportResultItem(
+                    claim_id=claim_data.claim_id,
+                    status="error",
+                    error=str(e),
+                )
+            )
             errors += 1
 
         except Exception as e:
-            results.append(ImportResultItem(
-                claim_id=claim_data.claim_id,
-                status="error",
-                error=f"Unexpected error: {str(e)}",
-            ))
+            results.append(
+                ImportResultItem(
+                    claim_id=claim_data.claim_id,
+                    status="error",
+                    error=f"Unexpected error: {str(e)}",
+                )
+            )
             errors += 1
 
     return ImportBundleResponse(
@@ -709,12 +711,14 @@ class StatusTransitionErrorResponse(BaseModel):
     current_status: str
     target_status: str
     reason: str
-    transition_rules: Dict[str, Any]
+    transition_rules: dict[str, Any]
 
 
-@router.patch("/{claim_id}", response_model=ClaimResponse, responses={
-    409: {"model": StatusTransitionErrorResponse, "description": "Status transition blocked by rules"}
-})
+@router.patch(
+    "/{claim_id}",
+    response_model=ClaimResponse,
+    responses={409: {"model": StatusTransitionErrorResponse, "description": "Status transition blocked by rules"}},
+)
 async def update_claim_by_id(claim_id: str, request: UpdateClaimRequest):
     """Update a claim's status or temporal fields.
 

@@ -13,14 +13,13 @@ Key design principles:
 import asyncio
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .claims import Claim, get_claim, update_claim
 from .council import query_model
 from .settings import get_settings
-
 
 # JSON schema for panel response
 VERDICT_SCHEMA = {
@@ -75,30 +74,32 @@ Respond with ONLY the JSON object, no other text."""
 @dataclass
 class PanelVerdict:
     """Single panel member's verdict."""
+
     model: str
     verdict: str  # accept, dispute, insufficient, abstain
     confidence: float
     reasoning: str
-    cited_evidence: List[str]
-    concerns: List[str]
-    error: Optional[str] = None
-    raw_response: Optional[str] = None
+    cited_evidence: list[str]
+    concerns: list[str]
+    error: str | None = None
+    raw_response: str | None = None
 
 
 @dataclass
 class AdjudicationResult:
     """Complete adjudication result from panel."""
+
     claim_id: str
     panel_size: int
     mode: str
-    panel_verdicts: List[PanelVerdict]
+    panel_verdicts: list[PanelVerdict]
     consensus_verdict: str
     consensus_confidence: float
     timestamp: str
     status_updated: bool = False
-    new_status: Optional[str] = None
+    new_status: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict for JSON serialization."""
         return {
             "claim_id": self.claim_id,
@@ -129,13 +130,13 @@ def _format_evidence_list(claim: Claim) -> str:
         lines.append(
             f"- **{ev.evidence_id}** {support_label} (weight: {ev.weight:.2f})\n"
             f"  Source: {ev.source_type}/{ev.source_id}\n"
-            f"  Quote: \"{ev.quote[:300]}{'...' if len(ev.quote) > 300 else ''}\""
+            f'  Quote: "{ev.quote[:300]}{"..." if len(ev.quote) > 300 else ""}"'
         )
 
     return "\n\n".join(lines)
 
 
-def _parse_verdict_json(response: str) -> Optional[Dict[str, Any]]:
+def _parse_verdict_json(response: str) -> dict[str, Any] | None:
     """Parse JSON from model response with fallback extraction."""
     # Try direct parse
     try:
@@ -162,7 +163,7 @@ def _parse_verdict_json(response: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _validate_verdict(parsed: Dict[str, Any], valid_evidence_ids: List[str]) -> Optional[str]:
+def _validate_verdict(parsed: dict[str, Any], valid_evidence_ids: list[str]) -> str | None:
     """Validate parsed verdict against schema. Returns error message or None."""
     # Check required fields
     required = ["verdict", "confidence", "reasoning", "cited_evidence"]
@@ -199,7 +200,7 @@ async def _query_panel_member(
     model: str,
     claim: Claim,
     evidence_list: str,
-    valid_evidence_ids: List[str],
+    valid_evidence_ids: list[str],
     temperature: float = 0.3,
 ) -> PanelVerdict:
     """Query a single panel member with retry on schema failure."""
@@ -235,10 +236,12 @@ async def _query_panel_member(
                 if attempt == 0:
                     # Retry with clarification
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({
-                        "role": "user",
-                        "content": "Please respond with ONLY a valid JSON object matching the schema. No other text.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Please respond with ONLY a valid JSON object matching the schema. No other text.",
+                        }
+                    )
                     continue
                 return PanelVerdict(
                     model=model,
@@ -256,10 +259,12 @@ async def _query_panel_member(
             if validation_error:
                 if attempt == 0:
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({
-                        "role": "user",
-                        "content": f"Schema error: {validation_error}. Please fix and respond with valid JSON only.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f"Schema error: {validation_error}. Please fix and respond with valid JSON only.",
+                        }
+                    )
                     continue
                 return PanelVerdict(
                     model=model,
@@ -309,7 +314,7 @@ async def _query_panel_member(
     )
 
 
-def _compute_consensus(verdicts: List[PanelVerdict]) -> tuple[str, float]:
+def _compute_consensus(verdicts: list[PanelVerdict]) -> tuple[str, float]:
     """Compute consensus verdict from panel.
 
     Returns (verdict, confidence) where:
@@ -323,7 +328,7 @@ def _compute_consensus(verdicts: List[PanelVerdict]) -> tuple[str, float]:
         return "insufficient", 0.0
 
     # Count by verdict type
-    counts: Dict[str, List[PanelVerdict]] = {}
+    counts: dict[str, list[PanelVerdict]] = {}
     for v in valid_verdicts:
         counts.setdefault(v.verdict, []).append(v)
 
@@ -357,7 +362,7 @@ def _compute_consensus(verdicts: List[PanelVerdict]) -> tuple[str, float]:
 
 async def adjudicate_claim(
     claim_id: str,
-    models: Optional[List[str]] = None,
+    models: list[str] | None = None,
     panel_size: int = 3,
     mode: str = "strict",
     update_status: bool = False,
@@ -393,10 +398,7 @@ async def adjudicate_claim(
     valid_evidence_ids = [ev.evidence_id for ev in claim.evidence]
 
     # Query panel in parallel
-    tasks = [
-        _query_panel_member(model, claim, evidence_list, valid_evidence_ids)
-        for model in panel_models
-    ]
+    tasks = [_query_panel_member(model, claim, evidence_list, valid_evidence_ids) for model in panel_models]
     verdicts = await asyncio.gather(*tasks)
 
     # Compute consensus

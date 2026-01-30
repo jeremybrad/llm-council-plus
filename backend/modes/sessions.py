@@ -4,17 +4,18 @@ Sessions store ledger + history + receipts server-side,
 so clients only send session_id + user_message per turn.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-import uuid
 import json
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
 class ModeSession:
     """A mode session with accumulated state."""
+
     session_id: str
     mode_id: str
     created_at: str
@@ -22,18 +23,18 @@ class ModeSession:
     status: str  # active | completed | aborted
     turn_count: int
     max_turns: int
-    model: Optional[str]
+    model: str | None
 
     # Accumulated state
-    ledger: Dict[str, Any]
-    messages: List[Dict[str, str]]  # role/content pairs
-    turn_receipts: List[Dict[str, Any]]  # per-turn metadata
+    ledger: dict[str, Any]
+    messages: list[dict[str, str]]  # role/content pairs
+    turn_receipts: list[dict[str, Any]]  # per-turn metadata
 
     # Stop state
     stop_recommended: bool = False
-    stop_criteria_met: List[str] = field(default_factory=list)
+    stop_criteria_met: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage/API."""
         return {
             "session_id": self.session_id,
@@ -48,11 +49,11 @@ class ModeSession:
             "messages": self.messages,
             "turn_receipts": self.turn_receipts,
             "stop_recommended": self.stop_recommended,
-            "stop_criteria_met": self.stop_criteria_met
+            "stop_criteria_met": self.stop_criteria_met,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ModeSession":
+    def from_dict(cls, data: dict[str, Any]) -> "ModeSession":
         """Create from dictionary."""
         return cls(
             session_id=data["session_id"],
@@ -67,15 +68,15 @@ class ModeSession:
             messages=data.get("messages", []),
             turn_receipts=data.get("turn_receipts", []),
             stop_recommended=data.get("stop_recommended", False),
-            stop_criteria_met=data.get("stop_criteria_met", [])
+            stop_criteria_met=data.get("stop_criteria_met", []),
         )
 
 
 class SessionStore:
     """In-memory session store with optional file persistence."""
 
-    def __init__(self, persist_dir: Optional[Path] = None):
-        self._sessions: Dict[str, ModeSession] = {}
+    def __init__(self, persist_dir: Path | None = None):
+        self._sessions: dict[str, ModeSession] = {}
         self.persist_dir = persist_dir
 
         # Load existing sessions if persist_dir exists
@@ -109,11 +110,7 @@ class SessionStore:
         tmp_path.replace(file_path)
 
     def create_session(
-        self,
-        mode_id: str,
-        initial_inquiry: Optional[str] = None,
-        max_turns: int = 12,
-        model: Optional[str] = None
+        self, mode_id: str, initial_inquiry: str | None = None, max_turns: int = 12, model: str | None = None
     ) -> ModeSession:
         """Create a new mode session."""
         now = datetime.utcnow().isoformat() + "Z"
@@ -135,30 +132,30 @@ class SessionStore:
                 "assumptions": [],
                 "counterexamples": [],
                 "contradictions": [],
-                "open_questions": []
+                "open_questions": [],
             },
             messages=[],
-            turn_receipts=[]
+            turn_receipts=[],
         )
 
         self._sessions[session.session_id] = session
         self._persist_session(session)
         return session
 
-    def get_session(self, session_id: str) -> Optional[ModeSession]:
+    def get_session(self, session_id: str) -> ModeSession | None:
         """Get session by ID."""
         return self._sessions.get(session_id)
 
     def update_session(
         self,
         session_id: str,
-        ledger: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, str]]] = None,
-        turn_receipt: Optional[Dict[str, Any]] = None,
-        status: Optional[str] = None,
-        stop_recommended: Optional[bool] = None,
-        stop_criteria_met: Optional[List[str]] = None
-    ) -> Optional[ModeSession]:
+        ledger: dict[str, Any] | None = None,
+        messages: list[dict[str, str]] | None = None,
+        turn_receipt: dict[str, Any] | None = None,
+        status: str | None = None,
+        stop_recommended: bool | None = None,
+        stop_criteria_met: list[str] | None = None,
+    ) -> ModeSession | None:
         """Update session state."""
         session = self._sessions.get(session_id)
         if not session:
@@ -188,11 +185,11 @@ class SessionStore:
         self._persist_session(session)
         return session
 
-    def complete_session(self, session_id: str) -> Optional[ModeSession]:
+    def complete_session(self, session_id: str) -> ModeSession | None:
         """Mark session as completed."""
         return self.update_session(session_id, status="completed")
 
-    def abort_session(self, session_id: str) -> Optional[ModeSession]:
+    def abort_session(self, session_id: str) -> ModeSession | None:
         """Mark session as aborted."""
         return self.update_session(session_id, status="aborted")
 
@@ -210,11 +207,7 @@ class SessionStore:
 
         return True
 
-    def list_sessions(
-        self,
-        mode_id: Optional[str] = None,
-        status: Optional[str] = None
-    ) -> List[ModeSession]:
+    def list_sessions(self, mode_id: str | None = None, status: str | None = None) -> list[ModeSession]:
         """List sessions, optionally filtered."""
         sessions = list(self._sessions.values())
 

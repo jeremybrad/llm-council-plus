@@ -4,13 +4,13 @@ Maintains a registry of available job classes that can be executed by the
 Night Shift runner. Jobs register themselves using the @register_job decorator.
 """
 
-from typing import Dict, Type, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .jobs.base import BaseJob
 
 # Registry of available jobs
-JOB_REGISTRY: Dict[str, Type["BaseJob"]] = {}
+JOB_REGISTRY: dict[str, type["BaseJob"]] = {}
 
 
 def register_job(name: str):
@@ -21,9 +21,11 @@ def register_job(name: str):
         class MyJob(BaseJob):
             ...
     """
-    def decorator(cls: Type["BaseJob"]):
+
+    def decorator(cls: type["BaseJob"]):
         JOB_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -32,6 +34,6 @@ def get_available_jobs() -> list[str]:
     return list(JOB_REGISTRY.keys())
 
 
-def get_job_class(name: str) -> Optional[Type["BaseJob"]]:
+def get_job_class(name: str) -> type["BaseJob"] | None:
     """Get job class by name."""
     return JOB_REGISTRY.get(name)

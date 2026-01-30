@@ -1,26 +1,24 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
 import asyncio
 import logging
-from . import openrouter
-from . import ollama_client
-from .config import get_council_models, get_chairman_model
-from .search import perform_web_search, SearchProvider
+from typing import Any
+
+from .config import get_chairman_model, get_council_models
 from .settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-from .providers.openai import OpenAIProvider
 from .providers.anthropic import AnthropicProvider
-from .providers.google import GoogleProvider
-from .providers.mistral import MistralProvider
-from .providers.deepseek import DeepSeekProvider
-from .providers.openrouter import OpenRouterProvider
-from .providers.ollama import OllamaProvider
-from .providers.groq import GroqProvider
 from .providers.custom_openai import CustomOpenAIProvider
+from .providers.deepseek import DeepSeekProvider
+from .providers.google import GoogleProvider
+from .providers.groq import GroqProvider
+from .providers.mistral import MistralProvider
+from .providers.ollama import OllamaProvider
+from .providers.openai import OpenAIProvider
+from .providers.openrouter import OpenRouterProvider
 
 # Initialize providers
 PROVIDERS = {
@@ -35,6 +33,7 @@ PROVIDERS = {
     "custom": CustomOpenAIProvider(),
 }
 
+
 def get_provider_for_model(model_id: str) -> Any:
     """Determine the provider for a given model ID."""
     if ":" in model_id:
@@ -46,30 +45,32 @@ def get_provider_for_model(model_id: str) -> Any:
     return PROVIDERS["openrouter"]
 
 
-async def query_model(model: str, messages: List[Dict[str, str]], timeout: float = 120.0, temperature: float = 0.7) -> Dict[str, Any]:
+async def query_model(
+    model: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
+) -> dict[str, Any]:
     """Dispatch query to appropriate provider."""
     provider = get_provider_for_model(model)
     return await provider.query(model, messages, timeout, temperature)
 
 
-async def query_models_parallel(models: List[str], messages: List[Dict[str, str]]) -> Dict[str, Any]:
+async def query_models_parallel(models: list[str], messages: list[dict[str, str]]) -> dict[str, Any]:
     """Dispatch parallel query to appropriate providers."""
     tasks = []
     model_to_task_map = {}
-    
+
     # Group models by provider to optimize batching if supported (mostly for OpenRouter/Ollama legacy)
     # But for simplicity and modularity, we'll just spawn individual tasks for now
     # OpenRouter and Ollama wrappers might handle their own internal concurrency if we called a batch method,
     # but the base interface is single query.
     # To maintain OpenRouter's batch efficiency if it exists, we could check type, but let's stick to simple asyncio.gather first.
-    
+
     # Actually, the previous implementation used specific batch logic for Ollama and OpenRouter.
     # We should preserve that if possible, OR just rely on asyncio.gather which is fine for HTTP clients.
     # The previous `_query_ollama_batch` was just a helper to strip prefixes.
     # `openrouter.query_models_parallel` was doing the gather.
-    
+
     # Let's just use asyncio.gather for all. It's clean and effective.
-    
+
     async def _query_safe(m: str):
         try:
             return m, await query_model(m, messages)
@@ -78,7 +79,7 @@ async def query_models_parallel(models: List[str], messages: List[Dict[str, str]
 
     tasks = [_query_safe(m) for m in models]
     results = await asyncio.gather(*tasks)
-    
+
     return dict(results)
 
 
@@ -101,6 +102,7 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
     search_context_block = ""
     if search_context:
         from .prompts import STAGE1_SEARCH_CONTEXT_TEMPLATE
+
         search_context_block = STAGE1_SEARCH_CONTEXT_TEMPLATE.format(search_context=search_context)
 
     # Use customizable Stage 1 prompt
@@ -108,12 +110,10 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
         prompt_template = settings.stage1_prompt
         if not prompt_template:
             from .prompts import STAGE1_PROMPT_DEFAULT
+
             prompt_template = STAGE1_PROMPT_DEFAULT
 
-        prompt = prompt_template.format(
-            user_query=user_query,
-            search_context_block=search_context_block
-        )
+        prompt = prompt_template.format(user_query=user_query, search_context_block=search_context_block)
     except (KeyError, AttributeError, TypeError) as e:
         logger.warning(f"Error formatting Stage 1 prompt: {e}. Using fallback.")
         prompt = f"{search_context_block}Question: {user_query}" if search_context_block else user_query
@@ -122,7 +122,7 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
 
     # Prepare tasks for all models
     models = get_council_models()
-    
+
     # Yield total count first
     yield len(models)
 
@@ -136,7 +136,7 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
 
     # Create tasks
     tasks = [asyncio.create_task(_query_safe(m)) for m in models]
-    
+
     # Process as they complete
     pending = set(tasks)
     try:
@@ -154,29 +154,25 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
             for task in done:
                 try:
                     model, response = await task
-                    
+
                     result = None
                     if response is not None:
-                        if response.get('error'):
+                        if response.get("error"):
                             # Include failed models with error info
                             result = {
                                 "model": model,
                                 "response": None,
-                                "error": response.get('error'),
-                                "error_message": response.get('error_message', 'Unknown error')
+                                "error": response.get("error"),
+                                "error_message": response.get("error_message", "Unknown error"),
                             }
                         else:
                             # Successful response - ensure content is always a string
-                            content = response.get('content', '')
+                            content = response.get("content", "")
                             if not isinstance(content, str):
                                 # Handle case where API returns non-string content (array, object, etc.)
-                                content = str(content) if content is not None else ''
-                            result = {
-                                "model": model,
-                                "response": content,
-                                "error": None
-                            }
-                    
+                                content = str(content) if content is not None else ""
+                            result = {"model": model, "response": content, "error": None}
+
                     if result:
                         yield result
                 except asyncio.CancelledError:
@@ -193,14 +189,11 @@ async def stage1_collect_responses(user_query: str, search_context: str = "", re
 
 
 async def stage2_collect_rankings(
-    user_query: str,
-    stage1_results: List[Dict[str, Any]],
-    search_context: str = "",
-    request: Any = None
-) -> Any: # Returns an async generator
+    user_query: str, stage1_results: list[dict[str, Any]], search_context: str = "", request: Any = None
+) -> Any:  # Returns an async generator
     """
     Stage 2: Collect peer rankings from all council models.
-    
+
     Yields:
         - First yield: label_to_model mapping (dict)
         - Subsequent yields: Individual model results (dict)
@@ -208,25 +201,21 @@ async def stage2_collect_rankings(
     settings = get_settings()
 
     # Filter to only successful responses for ranking
-    successful_results = [r for r in stage1_results if not r.get('error')]
+    successful_results = [r for r in stage1_results if not r.get("error")]
 
     # Create anonymized labels for responses (Response A, Response B, etc.)
     labels = [chr(65 + i) for i in range(len(successful_results))]  # A, B, C, ...
 
     # Create mapping from label to model name
-    label_to_model = {
-        f"Response {label}": result['model']
-        for label, result in zip(labels, successful_results)
-    }
-    
+    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, successful_results)}
+
     # Yield the mapping first so the caller has it
     yield label_to_model
 
     # Build the ranking prompt
-    responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, successful_results)
-    ])
+    responses_text = "\n\n".join(
+        [f"Response {label}:\n{result['response']}" for label, result in zip(labels, successful_results)]
+    )
 
     search_context_block = ""
     if search_context:
@@ -237,12 +226,11 @@ async def stage2_collect_rankings(
         prompt_template = settings.stage2_prompt
         if not prompt_template:
             from .prompts import STAGE2_PROMPT_DEFAULT
+
             prompt_template = STAGE2_PROMPT_DEFAULT
 
         ranking_prompt = prompt_template.format(
-            user_query=user_query,
-            responses_text=responses_text,
-            search_context_block=search_context_block
+            user_query=user_query, responses_text=responses_text, search_context_block=search_context_block
         )
     except (KeyError, AttributeError, TypeError) as e:
         logger.warning(f"Error formatting Stage 2 prompt: {e}. Using fallback.")
@@ -252,7 +240,7 @@ async def stage2_collect_rankings(
 
     # Only use models that successfully responded in Stage 1
     # (no point asking failed models to rank - they'll just fail again)
-    successful_models = [r['model'] for r in successful_results]
+    successful_models = [r["model"] for r in successful_results]
 
     # Use dedicated Stage 2 temperature (lower for consistent ranking output)
     stage2_temp = settings.stage2_temperature
@@ -283,36 +271,31 @@ async def stage2_collect_rankings(
             for task in done:
                 try:
                     model, response = await task
-                    
+
                     result = None
                     if response is not None:
-                        if response.get('error'):
+                        if response.get("error"):
                             # Include failed models with error info
                             result = {
                                 "model": model,
                                 "ranking": None,
                                 "parsed_ranking": [],
-                                "error": response.get('error'),
-                                "error_message": response.get('error_message', 'Unknown error')
+                                "error": response.get("error"),
+                                "error_message": response.get("error_message", "Unknown error"),
                             }
                         else:
                             # Ensure content is always a string before parsing
-                            full_text = response.get('content', '')
+                            full_text = response.get("content", "")
                             if not isinstance(full_text, str):
                                 # Handle case where API returns non-string content (array, object, etc.)
-                                full_text = str(full_text) if full_text is not None else ''
-                            
+                                full_text = str(full_text) if full_text is not None else ""
+
                             # Parse with expected count to avoid duplicates
                             expected_count = len(successful_results)
                             parsed = parse_ranking_from_text(full_text, expected_count=expected_count)
-                            
-                            result = {
-                                "model": model,
-                                "ranking": full_text,
-                                "parsed_ranking": parsed,
-                                "error": None
-                            }
-                    
+
+                            result = {"model": model, "ranking": full_text, "parsed_ranking": parsed, "error": None}
+
                     if result:
                         yield result
                 except asyncio.CancelledError:
@@ -330,10 +313,10 @@ async def stage2_collect_rankings(
 
 async def stage3_synthesize_final(
     user_query: str,
-    stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]],
-    search_context: str = ""
-) -> Dict[str, Any]:
+    stage1_results: list[dict[str, Any]],
+    stage2_results: list[dict[str, Any]],
+    search_context: str = "",
+) -> dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
 
@@ -348,17 +331,21 @@ async def stage3_synthesize_final(
     settings = get_settings()
 
     # Build comprehensive context for chairman (only include successful responses)
-    stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result.get('response', 'No response')}"
-        for result in stage1_results
-        if result.get('response') is not None
-    ])
+    stage1_text = "\n\n".join(
+        [
+            f"Model: {result['model']}\nResponse: {result.get('response', 'No response')}"
+            for result in stage1_results
+            if result.get("response") is not None
+        ]
+    )
 
-    stage2_text = "\n\n".join([
-        f"Model: {result['model']}\nRanking: {result.get('ranking', 'No ranking')}"
-        for result in stage2_results
-        if result.get('ranking') is not None
-    ])
+    stage2_text = "\n\n".join(
+        [
+            f"Model: {result['model']}\nRanking: {result.get('ranking', 'No ranking')}"
+            for result in stage2_results
+            if result.get("ranking") is not None
+        ]
+    )
 
     search_context_block = ""
     if search_context:
@@ -369,13 +356,14 @@ async def stage3_synthesize_final(
         prompt_template = settings.stage3_prompt
         if not prompt_template:
             from .prompts import STAGE3_PROMPT_DEFAULT
+
             prompt_template = STAGE3_PROMPT_DEFAULT
 
         chairman_prompt = prompt_template.format(
             user_query=user_query,
             stage1_text=stage1_text,
             stage2_text=stage2_text,
-            search_context_block=search_context_block
+            search_context_block=search_context_block,
         )
     except (KeyError, AttributeError, TypeError) as e:
         logger.warning(f"Error formatting Stage 3 prompt: {e}. Using fallback.")
@@ -383,15 +371,20 @@ async def stage3_synthesize_final(
 
     # Determine message structure based on whether the prompt is default or custom
     from .prompts import STAGE3_PROMPT_DEFAULT
-    
+
     # Check if we are using the default prompt (or if it's empty/None, which falls back to default)
-    is_default_prompt = (not settings.stage3_prompt) or (settings.stage3_prompt.strip() == STAGE3_PROMPT_DEFAULT.strip())
+    is_default_prompt = (not settings.stage3_prompt) or (
+        settings.stage3_prompt.strip() == STAGE3_PROMPT_DEFAULT.strip()
+    )
 
     if is_default_prompt:
         # If using default, split into System (Persona) and User (Data) for better adherence at low temp
         messages = [
-            {"role": "system", "content": "You are the Chairman of an LLM Council. Your task is to synthesize the provided model responses into a single, comprehensive answer."},
-            {"role": "user", "content": chairman_prompt}
+            {
+                "role": "system",
+                "content": "You are the Chairman of an LLM Council. Your task is to synthesize the provided model responses into a single, comprehensive answer.",
+            },
+            {"role": "user", "content": chairman_prompt},
         ]
     else:
         # If custom prompt, send as single User message to respect user's custom persona/structure
@@ -405,19 +398,19 @@ async def stage3_synthesize_final(
         response = await query_model(chairman_model, messages, temperature=chairman_temp)
 
         # Check for error in response
-        if response is None or response.get('error'):
-            error_msg = response.get('error_message', 'Unknown error') if response else 'No response received'
+        if response is None or response.get("error"):
+            error_msg = response.get("error_message", "Unknown error") if response else "No response received"
             return {
                 "model": chairman_model,
                 "response": f"Error synthesizing final answer: {error_msg}",
                 "error": True,
-                "error_message": error_msg
+                "error_message": error_msg,
             }
 
         # Combine reasoning and content if available
-        content = response.get('content') or ''
-        reasoning = response.get('reasoning') or response.get('reasoning_details') or ''
-        
+        content = response.get("content") or ""
+        reasoning = response.get("reasoning") or response.get("reasoning_details") or ""
+
         final_response = content
         if reasoning and not content:
             # If only reasoning is provided (some reasoning models do this)
@@ -428,25 +421,21 @@ async def stage3_synthesize_final(
             final_response = f"<think>\n{reasoning}\n</think>\n\n{content}"
 
         if not final_response:
-             final_response = "No response generated by the Chairman."
+            final_response = "No response generated by the Chairman."
 
-        return {
-            "model": chairman_model,
-            "response": final_response,
-            "error": False
-        }
+        return {"model": chairman_model, "response": final_response, "error": False}
 
     except Exception as e:
         logger.error(f"Unexpected error in Stage 3 synthesis: {e}")
         return {
             "model": chairman_model,
-            "response": f"Error: Unable to generate final synthesis due to unexpected error.",
+            "response": "Error: Unable to generate final synthesis due to unexpected error.",
             "error": True,
-            "error_message": str(e)
+            "error_message": str(e),
         }
 
 
-def parse_ranking_from_text(ranking_text: str, expected_count: int = None) -> List[str]:
+def parse_ranking_from_text(ranking_text: str, expected_count: int = None) -> list[str]:
     """
     Parse the FINAL RANKING section from the model's response.
 
@@ -461,7 +450,7 @@ def parse_ranking_from_text(ranking_text: str, expected_count: int = None) -> Li
 
     # Defensive: ensure ranking_text is a string
     if not isinstance(ranking_text, str):
-        ranking_text = str(ranking_text) if ranking_text is not None else ''
+        ranking_text = str(ranking_text) if ranking_text is not None else ""
 
     matches = []
 
@@ -473,29 +462,28 @@ def parse_ranking_from_text(ranking_text: str, expected_count: int = None) -> Li
             ranking_section = parts[1]
             # Try to extract numbered list format (e.g., "1. Response A")
             # This pattern looks for: number, period, optional space, "Response X"
-            numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
+            numbered_matches = re.findall(r"\d+\.\s*Response [A-Z]", ranking_section)
             if numbered_matches:
                 # Extract just the "Response X" part
-                matches = [re.search(r'Response [A-Z]', m).group() for m in numbered_matches]
+                matches = [re.search(r"Response [A-Z]", m).group() for m in numbered_matches]
             else:
                 # Fallback: Extract all "Response X" patterns in order from the section
-                matches = re.findall(r'Response [A-Z]', ranking_section)
-    
+                matches = re.findall(r"Response [A-Z]", ranking_section)
+
     # If no matches found in section (or section missing), fallback to full text search
     if not matches:
-        matches = re.findall(r'Response [A-Z]', ranking_text)
+        matches = re.findall(r"Response [A-Z]", ranking_text)
 
     # Truncate if expected_count is provided
     if expected_count and len(matches) > expected_count:
         matches = matches[:expected_count]
-        
+
     return matches
 
 
 def calculate_aggregate_rankings(
-    stage2_results: List[Dict[str, Any]],
-    label_to_model: Dict[str, str]
-) -> List[Dict[str, Any]]:
+    stage2_results: list[dict[str, Any]], label_to_model: dict[str, str]
+) -> list[dict[str, Any]]:
     """
     Calculate aggregate rankings across all models.
 
@@ -512,7 +500,7 @@ def calculate_aggregate_rankings(
     model_positions = defaultdict(list)
 
     for ranking in stage2_results:
-        ranking_text = ranking['ranking']
+        ranking_text = ranking["ranking"]
 
         # Parse the ranking from the structured format
         expected_count = len(label_to_model)
@@ -528,14 +516,10 @@ def calculate_aggregate_rankings(
     for model, positions in model_positions.items():
         if positions:
             avg_rank = sum(positions) / len(positions)
-            aggregate.append({
-                "model": model,
-                "average_rank": round(avg_rank, 2),
-                "rankings_count": len(positions)
-            })
+            aggregate.append({"model": model, "average_rank": round(avg_rank, 2), "rankings_count": len(positions)})
 
     # Sort by average rank (lower is better)
-    aggregate.sort(key=lambda x: x['average_rank'])
+    aggregate.sort(key=lambda x: x["average_rank"])
 
     return aggregate
 
@@ -564,7 +548,7 @@ async def generate_conversation_title(user_query: str) -> str:
         return "Untitled Conversation"
 
     # Remove quotes if present
-    title = title.strip('"\'')
+    title = title.strip("\"'")
 
     # Truncate if too long
     if len(title) > 50:
@@ -575,13 +559,13 @@ async def generate_conversation_title(user_query: str) -> str:
 
 def generate_search_query(user_query: str) -> str:
     """Return user query directly for web search (passthrough).
-    
-    Modern search engines (DuckDuckGo, Brave, Tavily) handle 
+
+    Modern search engines (DuckDuckGo, Brave, Tavily) handle
     natural language queries well without optimization.
-    
+
     Args:
         user_query: The user's full question
-    
+
     Returns:
         User query truncated to 100 characters for safety
     """

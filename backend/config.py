@@ -1,6 +1,7 @@
 """Configuration for the LLM Council."""
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,6 +19,7 @@ DEBUG_PROMPTS_DIR = "data/debug/prompts"
 def get_openrouter_api_key() -> str:
     """Get OpenRouter API key from settings or environment."""
     from .settings import get_settings
+
     settings = get_settings()
     if settings.openrouter_api_key:
         return settings.openrouter_api_key
@@ -27,19 +29,22 @@ def get_openrouter_api_key() -> str:
 def get_ollama_base_url() -> str:
     """Get Ollama base URL from settings."""
     from .settings import get_settings
+
     return get_settings().ollama_base_url
 
 
 def get_council_models() -> list:
     """Get council models from settings."""
-    from .settings import get_settings, DEFAULT_COUNCIL_MODELS
+    from .settings import DEFAULT_COUNCIL_MODELS, get_settings
+
     settings = get_settings()
     return settings.council_models or DEFAULT_COUNCIL_MODELS
 
 
 def get_chairman_model() -> str:
     """Get chairman model from settings."""
-    from .settings import get_settings, DEFAULT_CHAIRMAN_MODEL
+    from .settings import DEFAULT_CHAIRMAN_MODEL, get_settings
+
     settings = get_settings()
     return settings.chairman_model or DEFAULT_CHAIRMAN_MODEL
 

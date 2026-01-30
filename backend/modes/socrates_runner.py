@@ -1,13 +1,12 @@
 """Socrates Mode runner - handles turn execution and session management."""
 
 import json
-from typing import Dict, Any, List, Optional
 from pathlib import Path
-from datetime import datetime
+from typing import Any
 
+from .json_recovery import parse_json, recover_socrates_turn
 from .registry import load_mode
 from .sessions import ModeSession
-from .json_recovery import recover_socrates_turn, parse_json
 
 
 class SocratesRunner:
@@ -31,7 +30,7 @@ class SocratesRunner:
         schema_path = self.modes_dir / "socrates" / "schemas" / "output.schema.json"
         self.output_schema = json.loads(schema_path.read_text())
 
-    def format_ledger_for_prompt(self, ledger: Dict[str, Any], active_only: bool = True) -> str:
+    def format_ledger_for_prompt(self, ledger: dict[str, Any], active_only: bool = True) -> str:
         """Format ledger for inclusion in prompts."""
         if active_only:
             # Filter to active items only
@@ -78,24 +77,24 @@ class SocratesRunner:
 
         return "\n".join(lines) if lines else "(empty)"
 
-    def _get_active_view(self, ledger: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_active_view(self, ledger: dict[str, Any]) -> dict[str, Any]:
         """Filter ledger to active items only."""
-        view = {
-            "inquiry": ledger.get("inquiry", ""),
-            "thesis": ledger.get("thesis", "")
-        }
+        view = {"inquiry": ledger.get("inquiry", ""), "thesis": ledger.get("thesis", "")}
 
-        for field in ["definitions", "commitments", "assumptions",
-                      "counterexamples", "contradictions", "open_questions"]:
+        for field in [
+            "definitions",
+            "commitments",
+            "assumptions",
+            "counterexamples",
+            "contradictions",
+            "open_questions",
+        ]:
             items = ledger.get(field, [])
-            view[field] = [
-                item for item in items
-                if item.get("status", "active") == "active"
-            ]
+            view[field] = [item for item in items if item.get("status", "active") == "active"]
 
         return view
 
-    def format_conversation_history(self, messages: List[Dict[str, str]]) -> str:
+    def format_conversation_history(self, messages: list[dict[str, str]]) -> str:
         """Format conversation history for prompts."""
         if not messages:
             return "(no prior messages)"
@@ -116,11 +115,7 @@ class SocratesRunner:
 
         return "\n\n".join(lines)
 
-    def build_turn_prompt(
-        self,
-        session: ModeSession,
-        user_message: str
-    ) -> str:
+    def build_turn_prompt(self, session: ModeSession, user_message: str) -> str:
         """Build the prompt for a turn."""
         variables = {
             "TURN_NUMBER": session.turn_count + 1,
@@ -129,7 +124,7 @@ class SocratesRunner:
             "THESIS": session.ledger.get("thesis", "(not yet stated)"),
             "LEDGER_ACTIVE_VIEW": self.format_ledger_for_prompt(session.ledger, active_only=True),
             "CONVERSATION_HISTORY": self.format_conversation_history(session.messages),
-            "USER_MESSAGE": user_message
+            "USER_MESSAGE": user_message,
         }
 
         prompt = self.turn_template
@@ -144,7 +139,7 @@ class SocratesRunner:
             "TURN_COUNT": session.turn_count,
             "INQUIRY": session.ledger.get("inquiry", "(not defined)"),
             "LEDGER_FULL": self.format_ledger_for_prompt(session.ledger, active_only=False),
-            "CONVERSATION_HISTORY": self.format_conversation_history(session.messages)
+            "CONVERSATION_HISTORY": self.format_conversation_history(session.messages),
         }
 
         prompt = self.stop_template
@@ -153,24 +148,13 @@ class SocratesRunner:
 
         return prompt
 
-    def build_messages_for_llm(
-        self,
-        session: ModeSession,
-        user_message: str
-    ) -> List[Dict[str, str]]:
+    def build_messages_for_llm(self, session: ModeSession, user_message: str) -> list[dict[str, str]]:
         """Build the messages array for the LLM call."""
         turn_prompt = self.build_turn_prompt(session, user_message)
 
-        return [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": turn_prompt}
-        ]
+        return [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": turn_prompt}]
 
-    def process_turn_response(
-        self,
-        raw_response: str,
-        session: ModeSession
-    ) -> Dict[str, Any]:
+    def process_turn_response(self, raw_response: str, session: ModeSession) -> dict[str, Any]:
         """Process LLM response with 3-pass recovery.
 
         Returns:
@@ -182,14 +166,9 @@ class SocratesRunner:
         """
         output, success, error = recover_socrates_turn(raw_response)
 
-        return {
-            "success": success,
-            "output": output,
-            "error": error,
-            "parse_error": not success
-        }
+        return {"success": success, "output": output, "error": error, "parse_error": not success}
 
-    def should_recommend_stop(self, output: Dict[str, Any], session: ModeSession) -> bool:
+    def should_recommend_stop(self, output: dict[str, Any], session: ModeSession) -> bool:
         """Check if we should recommend stopping."""
         # Check explicit stop recommendation from Socrates
         stop_check = output.get("stop_check", {})
@@ -202,7 +181,7 @@ class SocratesRunner:
 
         return False
 
-    def get_stop_criteria_met(self, output: Dict[str, Any], session: ModeSession) -> List[str]:
+    def get_stop_criteria_met(self, output: dict[str, Any], session: ModeSession) -> list[str]:
         """Get list of stop criteria that are met."""
         criteria = []
 

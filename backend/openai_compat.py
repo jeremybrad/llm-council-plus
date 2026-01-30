@@ -7,56 +7,60 @@ The endpoint streams progress updates during deliberation and returns
 the final chair synthesis as the assistant response.
 """
 
-import json
 import time
 import uuid
-from datetime import datetime
-from typing import List, Dict, Any, Optional, AsyncGenerator
-from pydantic import BaseModel, Field
+from collections.abc import AsyncGenerator
+from typing import Any
 
+from pydantic import BaseModel
+
+from .roundtable import get_default_council, run_roundtable
 from .settings import get_settings
-from .roundtable import run_roundtable, get_default_council, AgentConfig
-
 
 # ============================================================================
 # OpenAI-Compatible Request/Response Models
 # ============================================================================
 
+
 class ChatMessage(BaseModel):
     """OpenAI-compatible chat message."""
+
     role: str  # "system", "user", "assistant"
     content: str
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
+
     model: str = "roundtable"
-    messages: List[ChatMessage]
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    messages: list[ChatMessage]
+    temperature: float | None = None
+    max_tokens: int | None = None
     stream: bool = True
 
     # Roundtable-specific options (passed via extra_body or model string)
     # These override settings defaults
-    council_models: Optional[List[str]] = None
-    num_rounds: Optional[int] = None
-    chair_model: Optional[str] = None
-    moderator_model: Optional[str] = None
-    max_parallel: Optional[int] = None
-    timeout_seconds: Optional[float] = None
+    council_models: list[str] | None = None
+    num_rounds: int | None = None
+    chair_model: str | None = None
+    moderator_model: str | None = None
+    max_parallel: int | None = None
+    timeout_seconds: float | None = None
 
 
 class ChatCompletionChoice(BaseModel):
     """OpenAI-compatible choice in completion response."""
+
     index: int = 0
-    message: Optional[ChatMessage] = None
-    delta: Optional[Dict[str, str]] = None
-    finish_reason: Optional[str] = None
+    message: ChatMessage | None = None
+    delta: dict[str, str] | None = None
+    finish_reason: str | None = None
 
 
 class ChatCompletionUsage(BaseModel):
     """OpenAI-compatible usage statistics."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -64,28 +68,31 @@ class ChatCompletionUsage(BaseModel):
 
 class ChatCompletionResponse(BaseModel):
     """OpenAI-compatible chat completion response."""
+
     id: str
     object: str = "chat.completion"
     created: int
     model: str
-    choices: List[ChatCompletionChoice]
-    usage: Optional[ChatCompletionUsage] = None
+    choices: list[ChatCompletionChoice]
+    usage: ChatCompletionUsage | None = None
 
 
 class ChatCompletionChunk(BaseModel):
     """OpenAI-compatible streaming chunk."""
+
     id: str
     object: str = "chat.completion.chunk"
     created: int
     model: str
-    choices: List[ChatCompletionChoice]
+    choices: list[ChatCompletionChoice]
 
 
 # ============================================================================
 # Request Processing
 # ============================================================================
 
-def extract_user_question(messages: List[ChatMessage]) -> str:
+
+def extract_user_question(messages: list[ChatMessage]) -> str:
     """Extract the user's question from messages.
 
     Takes the last user message as the question for the roundtable.
@@ -98,7 +105,7 @@ def extract_user_question(messages: List[ChatMessage]) -> str:
     return ""
 
 
-def extract_context(messages: List[ChatMessage]) -> str:
+def extract_context(messages: list[ChatMessage]) -> str:
     """Extract system context and conversation history.
 
     Returns formatted context for the roundtable including:
@@ -123,7 +130,7 @@ def extract_context(messages: List[ChatMessage]) -> str:
     return "\n\n---\n\n".join(context_parts) if context_parts else ""
 
 
-def parse_model_config(model: str) -> Dict[str, Any]:
+def parse_model_config(model: str) -> dict[str, Any]:
     """Parse model string for embedded configuration.
 
     Supports formats like:
@@ -158,10 +165,8 @@ def parse_model_config(model: str) -> Dict[str, Any]:
 # Streaming Response Generator
 # ============================================================================
 
-async def generate_openai_stream(
-    request: ChatCompletionRequest,
-    http_request: Any = None
-) -> AsyncGenerator[str, None]:
+
+async def generate_openai_stream(request: ChatCompletionRequest, http_request: Any = None) -> AsyncGenerator[str, None]:
     """Generate OpenAI-compatible streaming response from Roundtable.
 
     Streams progress updates as content deltas, then the final synthesis.
@@ -189,11 +194,11 @@ async def generate_openai_stream(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                delta={"content": "Error: No user message found in request."},
-                finish_reason="stop"
-            )]
+            choices=[
+                ChatCompletionChoice(
+                    index=0, delta={"content": "Error: No user message found in request."}, finish_reason="stop"
+                )
+            ],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
@@ -211,11 +216,15 @@ async def generate_openai_stream(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                delta={"content": "Error: Roundtable requires at least 2 council models. Please configure models in settings."},
-                finish_reason="stop"
-            )]
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    delta={
+                        "content": "Error: Roundtable requires at least 2 council models. Please configure models in settings."
+                    },
+                    finish_reason="stop",
+                )
+            ],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
@@ -245,7 +254,7 @@ async def generate_openai_stream(
             context=context,
             num_rounds=num_rounds,
             max_parallel=max_parallel,
-            request=http_request
+            request=http_request,
         ):
             event_type = event.get("type")
 
@@ -259,10 +268,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"role": "assistant", "content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"role": "assistant", "content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -275,10 +281,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -291,10 +294,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -304,10 +304,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -317,10 +314,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -330,10 +324,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -343,10 +334,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg}
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg})],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -359,15 +347,12 @@ async def generate_openai_stream(
                     # Stream in reasonable chunks for responsiveness
                     chunk_size = 50
                     for i in range(0, len(final_content), chunk_size):
-                        text_chunk = final_content[i:i + chunk_size]
+                        text_chunk = final_content[i : i + chunk_size]
                         chunk = ChatCompletionChunk(
                             id=completion_id,
                             created=created,
                             model=request.model,
-                            choices=[ChatCompletionChoice(
-                                index=0,
-                                delta={"content": text_chunk}
-                            )]
+                            choices=[ChatCompletionChoice(index=0, delta={"content": text_chunk})],
                         )
                         yield f"data: {chunk.model_dump_json()}\n\n"
 
@@ -377,11 +362,7 @@ async def generate_openai_stream(
                     id=completion_id,
                     created=created,
                     model=request.model,
-                    choices=[ChatCompletionChoice(
-                        index=0,
-                        delta={"content": progress_msg},
-                        finish_reason="stop"
-                    )]
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg}, finish_reason="stop")],
                 )
                 yield f"data: {chunk.model_dump_json()}\n\n"
                 yield "data: [DONE]\n\n"
@@ -392,11 +373,7 @@ async def generate_openai_stream(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                delta={},
-                finish_reason="stop"
-            )]
+            choices=[ChatCompletionChoice(index=0, delta={}, finish_reason="stop")],
         )
         yield f"data: {finish_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
@@ -407,19 +384,14 @@ async def generate_openai_stream(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                delta={"content": error_msg},
-                finish_reason="stop"
-            )]
+            choices=[ChatCompletionChoice(index=0, delta={"content": error_msg}, finish_reason="stop")],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
 
 
 async def generate_non_streaming_response(
-    request: ChatCompletionRequest,
-    http_request: Any = None
+    request: ChatCompletionRequest, http_request: Any = None
 ) -> ChatCompletionResponse:
     """Generate non-streaming response from Roundtable.
 
@@ -440,14 +412,13 @@ async def generate_non_streaming_response(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                message=ChatMessage(
-                    role="assistant",
-                    content="Error: No user message found in request."
-                ),
-                finish_reason="stop"
-            )]
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content="Error: No user message found in request."),
+                    finish_reason="stop",
+                )
+            ],
         )
 
     # Build council configuration
@@ -459,14 +430,16 @@ async def generate_non_streaming_response(
             id=completion_id,
             created=created,
             model=request.model,
-            choices=[ChatCompletionChoice(
-                index=0,
-                message=ChatMessage(
-                    role="assistant",
-                    content="Error: Roundtable requires at least 2 council models. Please configure models in settings."
-                ),
-                finish_reason="stop"
-            )]
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(
+                        role="assistant",
+                        content="Error: Roundtable requires at least 2 council models. Please configure models in settings.",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
         )
 
     agents = get_default_council(council_models)
@@ -490,7 +463,7 @@ async def generate_non_streaming_response(
             context=context,
             num_rounds=num_rounds,
             max_parallel=max_parallel,
-            request=http_request
+            request=http_request,
         ):
             if event.get("type") == "chair_complete":
                 chair_final = event.get("chair_final", {})
@@ -503,19 +476,18 @@ async def generate_non_streaming_response(
         id=completion_id,
         created=created,
         model=request.model,
-        choices=[ChatCompletionChoice(
-            index=0,
-            message=ChatMessage(
-                role="assistant",
-                content=final_content or "No response generated."
-            ),
-            finish_reason="stop"
-        )],
+        choices=[
+            ChatCompletionChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=final_content or "No response generated."),
+                finish_reason="stop",
+            )
+        ],
         usage=ChatCompletionUsage(
             prompt_tokens=0,  # We don't track tokens yet
             completion_tokens=0,
-            total_tokens=0
-        )
+            total_tokens=0,
+        ),
     )
 
 
@@ -523,7 +495,8 @@ async def generate_non_streaming_response(
 # Model List (for /v1/models endpoint)
 # ============================================================================
 
-def get_available_models() -> List[Dict[str, Any]]:
+
+def get_available_models() -> list[dict[str, Any]]:
     """Return list of available 'models' for OpenAI-compatible clients.
 
     Roundtable appears as a single model with variants.

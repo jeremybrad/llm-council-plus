@@ -1,29 +1,31 @@
 """Mode registry - load and list mode definitions from manifests."""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
 from pathlib import Path
+from typing import Any
+
 import yaml
 
 
 @dataclass
 class ModeDefinition:
     """Parsed mode manifest."""
+
     id: str
     display_name: str
     kind: str  # interactive | analysis | composite
     category: str
     description: str
     version: str
-    protocol: Dict[str, Any]
-    roles: List[Dict[str, str]]
-    inputs: List[Dict[str, str]]
-    outputs: List[str]
-    stop_criteria: List[str] = field(default_factory=list)
-    ui: Dict[str, Any] = field(default_factory=dict)
+    protocol: dict[str, Any]
+    roles: list[dict[str, str]]
+    inputs: list[dict[str, str]]
+    outputs: list[str]
+    stop_criteria: list[str] = field(default_factory=list)
+    ui: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_yaml(cls, data: Dict[str, Any]) -> "ModeDefinition":
+    def from_yaml(cls, data: dict[str, Any]) -> "ModeDefinition":
         """Create ModeDefinition from parsed YAML data."""
         return cls(
             id=data["id"],
@@ -37,10 +39,10 @@ class ModeDefinition:
             inputs=data.get("inputs", []),
             outputs=data.get("outputs", []),
             stop_criteria=data.get("stop_criteria", []),
-            ui=data.get("ui", {})
+            ui=data.get("ui", {}),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
             "id": self.id,
@@ -54,7 +56,7 @@ class ModeDefinition:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "stop_criteria": self.stop_criteria,
-            "ui": self.ui
+            "ui": self.ui,
         }
 
 
@@ -81,7 +83,7 @@ def load_mode(mode_id: str, modes_dir: Path) -> ModeDefinition:
     if not manifest_path.exists():
         raise FileNotFoundError(f"Mode manifest not found: {manifest_path}")
 
-    with open(manifest_path, "r") as f:
+    with open(manifest_path) as f:
         data = yaml.safe_load(f)
 
     if not data:
@@ -96,7 +98,7 @@ def load_mode(mode_id: str, modes_dir: Path) -> ModeDefinition:
     return ModeDefinition.from_yaml(data)
 
 
-def list_modes(modes_dir: Path) -> List[ModeDefinition]:
+def list_modes(modes_dir: Path) -> list[ModeDefinition]:
     """List all available modes.
 
     Args:

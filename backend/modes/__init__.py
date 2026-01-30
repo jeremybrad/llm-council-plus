@@ -8,35 +8,37 @@ Each mode is a folder with:
 - schemas/: JSON schemas for output validation
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, AsyncIterator
-from pathlib import Path
 import copy
 import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from .registry import load_mode, list_modes, ModeDefinition
-from .sessions import SessionStore, ModeSession
-from .json_recovery import parse_json, extract_best_effort_question, recover_socrates_turn
+from .json_recovery import extract_best_effort_question, parse_json, recover_socrates_turn
+from .registry import ModeDefinition, list_modes, load_mode
+from .sessions import ModeSession, SessionStore
 
 
 @dataclass
 class ModeRunResult:
     """Result of a mode run or turn."""
+
     run_id: str
     mode_id: str
-    session_id: Optional[str]
+    session_id: str | None
     status: str  # completed | in_progress | aborted | error
-    output: Dict[str, Any]
-    receipts: Dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any]
+    receipts: dict[str, Any] = field(default_factory=dict)
 
 
 class ModeRunner:
     """Orchestrates mode execution with session management."""
 
-    def __init__(self, modes_dir: Optional[Path] = None):
+    def __init__(self, modes_dir: Path | None = None):
         self.modes_dir = modes_dir or Path(__file__).parent
         self.session_store = SessionStore()
-        self._mode_cache: Dict[str, ModeDefinition] = {}
+        self._mode_cache: dict[str, ModeDefinition] = {}
 
     async def get_mode(self, mode_id: str) -> ModeDefinition:
         """Load mode definition (cached)."""
@@ -44,16 +46,11 @@ class ModeRunner:
             self._mode_cache[mode_id] = load_mode(mode_id, self.modes_dir)
         return self._mode_cache[mode_id]
 
-    async def get_all_modes(self) -> List[ModeDefinition]:
+    async def get_all_modes(self) -> list[ModeDefinition]:
         """List all available modes."""
         return list_modes(self.modes_dir)
 
-    def render_prompt(
-        self,
-        mode_id: str,
-        template_name: str,
-        variables: Dict[str, Any]
-    ) -> str:
+    def render_prompt(self, mode_id: str, template_name: str, variables: dict[str, Any]) -> str:
         """Render a prompt template with variables."""
         mode = load_mode(mode_id, self.modes_dir)
         template_path = self.modes_dir / mode_id / "prompts" / f"{template_name}.txt"
@@ -67,16 +64,14 @@ class ModeRunner:
         for key, value in variables.items():
             if isinstance(value, (dict, list)):
                 import json
+
                 value = json.dumps(value, indent=2)
             template = template.replace(f"{{{key}}}", str(value))
 
         return template
 
     async def create_session(
-        self,
-        mode_id: str,
-        initial_inquiry: Optional[str] = None,
-        model: Optional[str] = None
+        self, mode_id: str, initial_inquiry: str | None = None, model: str | None = None
     ) -> ModeSession:
         """Create a new mode session."""
         mode = await self.get_mode(mode_id)
@@ -84,15 +79,15 @@ class ModeRunner:
             mode_id=mode_id,
             initial_inquiry=initial_inquiry,
             max_turns=mode.protocol.get("max_turns_default", 12),
-            model=model
+            model=model,
         )
         return session
 
-    async def get_session(self, session_id: str) -> Optional[ModeSession]:
+    async def get_session(self, session_id: str) -> ModeSession | None:
         """Retrieve an existing session."""
         return self.session_store.get_session(session_id)
 
-    def merge_ledger(self, current: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
+    def merge_ledger(self, current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
         """Merge ledger_update into current ledger.
 
         Uses ID-based tracking with status fields (active/superseded/retracted).
@@ -102,8 +97,12 @@ class ModeRunner:
 
         # List fields with ID-based items
         list_fields = [
-            "definitions", "commitments", "assumptions",
-            "counterexamples", "contradictions", "open_questions"
+            "definitions",
+            "commitments",
+            "assumptions",
+            "counterexamples",
+            "contradictions",
+            "open_questions",
         ]
 
         for field_name in list_fields:
@@ -146,33 +145,32 @@ class ModeRunner:
 
         return merged
 
-    def get_active_ledger_view(self, ledger: Dict[str, Any]) -> Dict[str, Any]:
+    def get_active_ledger_view(self, ledger: dict[str, Any]) -> dict[str, Any]:
         """Derive current state view from event-sourced ledger.
 
         Filters to only active items (not superseded or retracted).
         """
-        view = {
-            "inquiry": ledger.get("inquiry", ""),
-            "thesis": ledger.get("thesis", "")
-        }
+        view = {"inquiry": ledger.get("inquiry", ""), "thesis": ledger.get("thesis", "")}
 
         list_fields = [
-            "definitions", "commitments", "assumptions",
-            "counterexamples", "contradictions", "open_questions"
+            "definitions",
+            "commitments",
+            "assumptions",
+            "counterexamples",
+            "contradictions",
+            "open_questions",
         ]
 
         for field_name in list_fields:
             items = ledger.get(field_name, [])
-            view[field_name] = [
-                item for item in items
-                if item.get("status", "active") == "active"
-            ]
+            view[field_name] = [item for item in items if item.get("status", "active") == "active"]
 
         return view
 
 
 # Module-level instance for convenience
-_runner: Optional[ModeRunner] = None
+_runner: ModeRunner | None = None
+
 
 def get_mode_runner() -> ModeRunner:
     """Get or create the global ModeRunner instance."""

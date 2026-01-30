@@ -1,10 +1,10 @@
 """Settings storage and management."""
 
 import json
-import os
 from pathlib import Path
-from typing import Optional, List, Dict
+
 from pydantic import BaseModel
+
 from .search import SearchProvider
 
 # Settings file path
@@ -20,7 +20,7 @@ DEFAULT_ENABLED_PROVIDERS = {
     "ollama": False,
     "groq": False,
     "direct": False,  # Master toggle for all direct connections
-    "custom": False   # Custom OpenAI-compatible endpoint
+    "custom": False,  # Custom OpenAI-compatible endpoint
 }
 
 # Default direct provider toggles (individual)
@@ -30,7 +30,7 @@ DEFAULT_DIRECT_PROVIDER_TOGGLES = {
     "google": False,
     "mistral": False,
     "deepseek": False,
-    "groq": False
+    "groq": False,
 }
 
 
@@ -42,73 +42,129 @@ AVAILABLE_MODELS = [
     {"id": "openai/o1-preview", "name": "o1 Preview [OpenRouter]", "provider": "OpenAI", "source": "openrouter"},
     {"id": "openai/o1-mini", "name": "o1 Mini [OpenRouter]", "provider": "OpenAI", "source": "openrouter"},
     # Google
-    {"id": "google/gemini-pro-1.5", "name": "Gemini 1.5 Pro [OpenRouter]", "provider": "Google", "source": "openrouter", "is_free": True},
-    {"id": "google/gemini-flash-1.5", "name": "Gemini 1.5 Flash [OpenRouter]", "provider": "Google", "source": "openrouter", "is_free": True},
-    {"id": "google/gemini-pro-vision", "name": "Gemini Pro Vision [OpenRouter]", "provider": "Google", "source": "openrouter"},
+    {
+        "id": "google/gemini-pro-1.5",
+        "name": "Gemini 1.5 Pro [OpenRouter]",
+        "provider": "Google",
+        "source": "openrouter",
+        "is_free": True,
+    },
+    {
+        "id": "google/gemini-flash-1.5",
+        "name": "Gemini 1.5 Flash [OpenRouter]",
+        "provider": "Google",
+        "source": "openrouter",
+        "is_free": True,
+    },
+    {
+        "id": "google/gemini-pro-vision",
+        "name": "Gemini Pro Vision [OpenRouter]",
+        "provider": "Google",
+        "source": "openrouter",
+    },
     # Anthropic
-    {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet [OpenRouter]", "provider": "Anthropic", "source": "openrouter"},
-    {"id": "anthropic/claude-3-opus", "name": "Claude 3 Opus [OpenRouter]", "provider": "Anthropic", "source": "openrouter"},
-    {"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku [OpenRouter]", "provider": "Anthropic", "source": "openrouter"},
+    {
+        "id": "anthropic/claude-3.5-sonnet",
+        "name": "Claude 3.5 Sonnet [OpenRouter]",
+        "provider": "Anthropic",
+        "source": "openrouter",
+    },
+    {
+        "id": "anthropic/claude-3-opus",
+        "name": "Claude 3 Opus [OpenRouter]",
+        "provider": "Anthropic",
+        "source": "openrouter",
+    },
+    {
+        "id": "anthropic/claude-3-haiku",
+        "name": "Claude 3 Haiku [OpenRouter]",
+        "provider": "Anthropic",
+        "source": "openrouter",
+    },
     # Meta
-    {"id": "meta-llama/llama-3.1-405b-instruct", "name": "Llama 3.1 405B [OpenRouter]", "provider": "Meta", "source": "openrouter"},
-    {"id": "meta-llama/llama-3.1-70b-instruct", "name": "Llama 3.1 70B [OpenRouter]", "provider": "Meta", "source": "openrouter", "is_free": True},
+    {
+        "id": "meta-llama/llama-3.1-405b-instruct",
+        "name": "Llama 3.1 405B [OpenRouter]",
+        "provider": "Meta",
+        "source": "openrouter",
+    },
+    {
+        "id": "meta-llama/llama-3.1-70b-instruct",
+        "name": "Llama 3.1 70B [OpenRouter]",
+        "provider": "Meta",
+        "source": "openrouter",
+        "is_free": True,
+    },
     # Mistral
-    {"id": "mistralai/mistral-large", "name": "Mistral Large [OpenRouter]", "provider": "Mistral", "source": "openrouter"},
-    {"id": "mistralai/mistral-medium", "name": "Mistral Medium [OpenRouter]", "provider": "Mistral", "source": "openrouter"},
+    {
+        "id": "mistralai/mistral-large",
+        "name": "Mistral Large [OpenRouter]",
+        "provider": "Mistral",
+        "source": "openrouter",
+    },
+    {
+        "id": "mistralai/mistral-medium",
+        "name": "Mistral Medium [OpenRouter]",
+        "provider": "Mistral",
+        "source": "openrouter",
+    },
     # DeepSeek
-    {"id": "deepseek/deepseek-chat", "name": "DeepSeek V3 [OpenRouter]", "provider": "DeepSeek", "source": "openrouter"},
+    {
+        "id": "deepseek/deepseek-chat",
+        "name": "DeepSeek V3 [OpenRouter]",
+        "provider": "DeepSeek",
+        "source": "openrouter",
+    },
 ]
 
 
-from .prompts import (
-    STAGE1_PROMPT_DEFAULT,
-    STAGE2_PROMPT_DEFAULT,
-    STAGE3_PROMPT_DEFAULT
-)
+from .prompts import STAGE1_PROMPT_DEFAULT, STAGE2_PROMPT_DEFAULT, STAGE3_PROMPT_DEFAULT
+
 
 class Settings(BaseModel):
     """Application settings."""
+
     search_provider: SearchProvider = SearchProvider.DUCKDUCKGO
     search_keyword_extraction: str = "direct"  # "direct" or "yake"
 
     # API Keys
-    tavily_api_key: Optional[str] = None
-    brave_api_key: Optional[str] = None
-    openrouter_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    anthropic_api_key: Optional[str] = None
-    google_api_key: Optional[str] = None
-    mistral_api_key: Optional[str] = None
-    deepseek_api_key: Optional[str] = None
-    groq_api_key: Optional[str] = None
+    tavily_api_key: str | None = None
+    brave_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
+    mistral_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    groq_api_key: str | None = None
 
     # Ollama Settings
     ollama_base_url: str = "http://localhost:11434"
 
     # Custom OpenAI-compatible endpoint
-    custom_endpoint_name: Optional[str] = None
-    custom_endpoint_url: Optional[str] = None
-    custom_endpoint_api_key: Optional[str] = None
+    custom_endpoint_name: str | None = None
+    custom_endpoint_url: str | None = None
+    custom_endpoint_api_key: str | None = None
 
     # Enabled Providers (which sources are available for council selection)
-    enabled_providers: Dict[str, bool] = DEFAULT_ENABLED_PROVIDERS.copy()
+    enabled_providers: dict[str, bool] = DEFAULT_ENABLED_PROVIDERS.copy()
 
     # Individual direct provider toggles
-    direct_provider_toggles: Dict[str, bool] = DEFAULT_DIRECT_PROVIDER_TOGGLES.copy()
+    direct_provider_toggles: dict[str, bool] = DEFAULT_DIRECT_PROVIDER_TOGGLES.copy()
 
     # Council Configuration (unified across all providers)
-    council_models: List[str] = DEFAULT_COUNCIL_MODELS.copy()
+    council_models: list[str] = DEFAULT_COUNCIL_MODELS.copy()
     chairman_model: str = DEFAULT_CHAIRMAN_MODEL
-    
+
     # Temperature Settings
     council_temperature: float = 0.5
     chairman_temperature: float = 0.4
     stage2_temperature: float = 0.3  # Lower for consistent ranking output
-    
+
     # Remote/Local filters
-    council_member_filters: Optional[Dict[int, str]] = None
-    chairman_filter: Optional[str] = None
-    search_query_filter: Optional[str] = None
+    council_member_filters: dict[int, str] | None = None
+    chairman_filter: str | None = None
+    search_query_filter: str | None = None
 
     full_content_results: int = 3  # Number of search results to fetch full content for (0 to disable)
     show_free_only: bool = False  # Filter to show only free OpenRouter models
@@ -117,7 +173,7 @@ class Settings(BaseModel):
     stage1_prompt: str = STAGE1_PROMPT_DEFAULT
     stage2_prompt: str = STAGE2_PROMPT_DEFAULT
     stage3_prompt: str = STAGE3_PROMPT_DEFAULT
-    
+
     # Execution Mode
     # Valid modes: 'chat_only', 'chat_ranking', 'full', 'roundtable'
     execution_mode: str = "full"
@@ -132,7 +188,7 @@ def get_settings() -> Settings:
     """Load settings from file, or return defaults."""
     if SETTINGS_FILE.exists():
         try:
-            with open(SETTINGS_FILE, "r") as f:
+            with open(SETTINGS_FILE) as f:
                 data = json.load(f)
                 return Settings(**data)
         except Exception:

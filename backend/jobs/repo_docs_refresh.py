@@ -15,23 +15,24 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..preflight import PreflightInfo
 from ..job_registry import register_job
+from ..preflight import PreflightInfo
 from .base import BaseJob, JobResult, JobStatus
 
 
 @dataclass
 class DocIssue:
     """An issue found in a documentation file."""
+
     file_path: str
     line_number: int
     issue_type: str
     message: str
     severity: str = "info"  # info, warning, error
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "file_path": self.file_path,
             "line_number": self.line_number,
@@ -44,15 +45,16 @@ class DocIssue:
 @dataclass
 class DocFileResult:
     """Result of analyzing a single documentation file."""
+
     file_path: str
     word_count: int = 0
     line_count: int = 0
     heading_count: int = 0
     link_count: int = 0
     code_block_count: int = 0
-    issues: List[DocIssue] = field(default_factory=list)
+    issues: list[DocIssue] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "file_path": self.file_path,
             "word_count": self.word_count,
@@ -70,21 +72,21 @@ class RepoDocsRefreshJob(BaseJob):
     """Job to refresh and validate repository documentation."""
 
     # Patterns to identify issues
-    TODO_PATTERN = re.compile(r'\b(TODO|FIXME|XXX|HACK|BUG)\b[:\s]*(.*)', re.IGNORECASE)
-    INTERNAL_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-    HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
-    CODE_BLOCK_PATTERN = re.compile(r'```[\s\S]*?```')
+    TODO_PATTERN = re.compile(r"\b(TODO|FIXME|XXX|HACK|BUG)\b[:\s]*(.*)", re.IGNORECASE)
+    INTERNAL_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+    CODE_BLOCK_PATTERN = re.compile(r"```[\s\S]*?```")
 
     # File patterns to scan
-    DOC_EXTENSIONS = {'.md', '.markdown', '.rst', '.txt'}
-    EXCLUDED_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build'}
+    DOC_EXTENSIONS = {".md", ".markdown", ".rst", ".txt"}
+    EXCLUDED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.doc_files: List[Path] = []
-        self.results: List[DocFileResult] = []
+        self.doc_files: list[Path] = []
+        self.results: list[DocFileResult] = []
 
-    def _find_doc_files(self) -> List[Path]:
+    def _find_doc_files(self) -> list[Path]:
         """Find all documentation files in the repository."""
         doc_files = []
         repo_root = self.data_dir.parent  # data_dir is repo/data, so parent is repo
@@ -103,8 +105,8 @@ class RepoDocsRefreshJob(BaseJob):
         result = DocFileResult(file_path=str(file_path.relative_to(self.data_dir.parent)))
 
         try:
-            content = file_path.read_text(encoding='utf-8')
-            lines = content.split('\n')
+            content = file_path.read_text(encoding="utf-8")
+            lines = content.split("\n")
 
             result.line_count = len(lines)
             result.word_count = len(content.split())
@@ -125,58 +127,68 @@ class RepoDocsRefreshJob(BaseJob):
             for line_num, line in enumerate(lines, 1):
                 match = self.TODO_PATTERN.search(line)
                 if match:
-                    result.issues.append(DocIssue(
-                        file_path=result.file_path,
-                        line_number=line_num,
-                        issue_type="todo",
-                        message=f"{match.group(1)}: {match.group(2).strip()[:100]}",
-                        severity="info"
-                    ))
+                    result.issues.append(
+                        DocIssue(
+                            file_path=result.file_path,
+                            line_number=line_num,
+                            issue_type="todo",
+                            message=f"{match.group(1)}: {match.group(2).strip()[:100]}",
+                            severity="info",
+                        )
+                    )
 
             # Check for broken internal links
             for link_text, link_url in links:
-                if link_url.startswith(('http://', 'https://', 'mailto:', '#')):
+                if link_url.startswith(("http://", "https://", "mailto:", "#")):
                     continue  # Skip external links and anchors
 
                 # Check if internal file exists
-                linked_path = file_path.parent / link_url.split('#')[0]
+                linked_path = file_path.parent / link_url.split("#")[0]
                 if not linked_path.exists():
-                    result.issues.append(DocIssue(
-                        file_path=result.file_path,
-                        line_number=0,  # Can't easily determine line number
-                        issue_type="broken_link",
-                        message=f"Broken internal link: {link_url}",
-                        severity="warning"
-                    ))
+                    result.issues.append(
+                        DocIssue(
+                            file_path=result.file_path,
+                            line_number=0,  # Can't easily determine line number
+                            issue_type="broken_link",
+                            message=f"Broken internal link: {link_url}",
+                            severity="warning",
+                        )
+                    )
 
             # Check for empty file
             if result.word_count == 0:
-                result.issues.append(DocIssue(
-                    file_path=result.file_path,
-                    line_number=1,
-                    issue_type="empty_file",
-                    message="File is empty",
-                    severity="warning"
-                ))
+                result.issues.append(
+                    DocIssue(
+                        file_path=result.file_path,
+                        line_number=1,
+                        issue_type="empty_file",
+                        message="File is empty",
+                        severity="warning",
+                    )
+                )
 
             # Check for missing heading
             if result.heading_count == 0 and result.word_count > 10:
-                result.issues.append(DocIssue(
-                    file_path=result.file_path,
-                    line_number=1,
-                    issue_type="no_heading",
-                    message="File has no headings",
-                    severity="info"
-                ))
+                result.issues.append(
+                    DocIssue(
+                        file_path=result.file_path,
+                        line_number=1,
+                        issue_type="no_heading",
+                        message="File has no headings",
+                        severity="info",
+                    )
+                )
 
         except Exception as e:
-            result.issues.append(DocIssue(
-                file_path=result.file_path,
-                line_number=0,
-                issue_type="read_error",
-                message=f"Could not read file: {e}",
-                severity="error"
-            ))
+            result.issues.append(
+                DocIssue(
+                    file_path=result.file_path,
+                    line_number=0,
+                    issue_type="read_error",
+                    message=f"Could not read file: {e}",
+                    severity="error",
+                )
+            )
 
         return result
 
@@ -226,7 +238,7 @@ class RepoDocsRefreshJob(BaseJob):
         self.results = []
         total_issues = 0
         issues_by_severity = {"error": 0, "warning": 0, "info": 0}
-        issues_by_type: Dict[str, int] = {}
+        issues_by_type: dict[str, int] = {}
 
         for file_path in self.doc_files:
             # Check budget
@@ -297,11 +309,7 @@ class RepoDocsRefreshJob(BaseJob):
 
         return result
 
-    def _generate_markdown_report(
-        self,
-        issues_by_severity: Dict[str, int],
-        issues_by_type: Dict[str, int]
-    ) -> str:
+    def _generate_markdown_report(self, issues_by_severity: dict[str, int], issues_by_type: dict[str, int]) -> str:
         """Generate markdown documentation health report."""
         lines = [
             "# Documentation Health Report",
@@ -319,10 +327,12 @@ class RepoDocsRefreshJob(BaseJob):
         ]
 
         if issues_by_type:
-            lines.extend([
-                "## Issues by Type",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Issues by Type",
+                    "",
+                ]
+            )
             for issue_type, count in sorted(issues_by_type.items(), key=lambda x: -x[1]):
                 lines.append(f"- **{issue_type}**: {count}")
             lines.append("")
@@ -330,10 +340,12 @@ class RepoDocsRefreshJob(BaseJob):
         # List files with issues
         files_with_issues = [r for r in self.results if r.issues]
         if files_with_issues:
-            lines.extend([
-                "## Files with Issues",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Files with Issues",
+                    "",
+                ]
+            )
             for file_result in files_with_issues:
                 lines.append(f"### {file_result.file_path}")
                 lines.append("")
@@ -346,15 +358,17 @@ class RepoDocsRefreshJob(BaseJob):
         # Statistics section
         total_words = sum(r.word_count for r in self.results)
         total_lines = sum(r.line_count for r in self.results)
-        lines.extend([
-            "## Statistics",
-            "",
-            f"- Total words: {total_words:,}",
-            f"- Total lines: {total_lines:,}",
-            f"- Total headings: {sum(r.heading_count for r in self.results)}",
-            f"- Total links: {sum(r.link_count for r in self.results)}",
-            f"- Total code blocks: {sum(r.code_block_count for r in self.results)}",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Statistics",
+                "",
+                f"- Total words: {total_words:,}",
+                f"- Total lines: {total_lines:,}",
+                f"- Total headings: {sum(r.heading_count for r in self.results)}",
+                f"- Total links: {sum(r.link_count for r in self.results)}",
+                f"- Total code blocks: {sum(r.code_block_count for r in self.results)}",
+                "",
+            ]
+        )
 
         return "\n".join(lines)

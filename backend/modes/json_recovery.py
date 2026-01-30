@@ -12,7 +12,7 @@ Recovery order:
 
 import json
 import re
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
 
 
 def extract_json_block(text: str) -> str:
@@ -24,12 +24,12 @@ def extract_json_block(text: str) -> str:
     - Nested braces
     """
     # Try markdown code block first
-    code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    code_block_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
     if code_block_match:
         return code_block_match.group(1)
 
     # Find first { and match to closing }
-    start = text.find('{')
+    start = text.find("{")
     if start == -1:
         return text
 
@@ -43,7 +43,7 @@ def extract_json_block(text: str) -> str:
             escape_next = False
             continue
 
-        if char == '\\' and in_string:
+        if char == "\\" and in_string:
             escape_next = True
             continue
 
@@ -54,15 +54,15 @@ def extract_json_block(text: str) -> str:
         if in_string:
             continue
 
-        if char == '{':
+        if char == "{":
             depth += 1
-        elif char == '}':
+        elif char == "}":
             depth -= 1
             if depth == 0:
                 end = i
                 break
 
-    return text[start:end + 1]
+    return text[start : end + 1]
 
 
 def repair_json(text: str) -> str:
@@ -78,10 +78,10 @@ def repair_json(text: str) -> str:
 
     # Smart quotes to straight quotes
     result = result.replace('"', '"').replace('"', '"')
-    result = result.replace(''', "'").replace(''', "'")
+    result = result.replace(""", "'").replace(""", "'")
 
     # Trailing commas before ] or }
-    result = re.sub(r',(\s*[}\]])', r'\1', result)
+    result = re.sub(r",(\s*[}\]])", r"\1", result)
 
     # Single quotes to double quotes (risky but often needed)
     # Only for simple cases where key/value pattern is clear
@@ -90,12 +90,12 @@ def repair_json(text: str) -> str:
     result = re.sub(r"(:\s*)'([^']*)'", r'\1"\2"', result)
 
     # Unquoted keys (simple alphanumeric)
-    result = re.sub(r'(\{|\,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', result)
+    result = re.sub(r"(\{|\,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:", r'\1"\2":', result)
 
     return result
 
 
-def parse_json(text: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def parse_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
     """Parse JSON with 3-pass recovery.
 
     Returns:
@@ -123,7 +123,7 @@ def parse_json(text: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         return None, f"JSON parse failed after 3 passes: {e}"
 
 
-def extract_best_effort_question(text: str) -> Optional[str]:
+def extract_best_effort_question(text: str) -> str | None:
     """Extract a question from text even if JSON parsing failed.
 
     Best-effort extraction so the UI has something to show.
@@ -139,32 +139,32 @@ def extract_best_effort_question(text: str) -> Optional[str]:
         return match.group(1)
 
     # Find first line ending in ?
-    lines = text.split('\n')
+    lines = text.split("\n")
     for line in lines:
         line = line.strip()
-        if line.endswith('?'):
+        if line.endswith("?"):
             # Clean up any JSON artifacts
-            cleaned = re.sub(r'^["\s{,]+', '', line)
-            cleaned = re.sub(r'["\s},]+$', '', cleaned)
-            if cleaned.endswith('?'):
+            cleaned = re.sub(r'^["\s{,]+', "", line)
+            cleaned = re.sub(r'["\s},]+$', "", cleaned)
+            if cleaned.endswith("?"):
                 return cleaned
 
     # Find any sentence ending in ?
-    sentences = re.findall(r'[^.!?]*\?', text)
+    sentences = re.findall(r"[^.!?]*\?", text)
     if sentences:
         cleaned = sentences[0].strip()
-        cleaned = re.sub(r'^["\s{,]+', '', cleaned)
+        cleaned = re.sub(r'^["\s{,]+', "", cleaned)
         return cleaned
 
     return None
 
 
-def extract_best_effort_ledger_update(text: str) -> Dict[str, Any]:
+def extract_best_effort_ledger_update(text: str) -> dict[str, Any]:
     """Extract ledger-like data from text even if JSON parsing failed.
 
     Returns partial ledger_update with whatever could be extracted.
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     # Try to extract thesis
     thesis_match = re.search(r'"?thesis"?\s*:\s*"([^"]+)"', text)
@@ -179,9 +179,7 @@ def extract_best_effort_ledger_update(text: str) -> Dict[str, Any]:
     return result
 
 
-def recover_socrates_turn(
-    text: str
-) -> Tuple[Dict[str, Any], bool, Optional[str]]:
+def recover_socrates_turn(text: str) -> tuple[dict[str, Any], bool, str | None]:
     """Recover a Socrates turn response with best-effort fallback.
 
     Args:
@@ -208,12 +206,9 @@ def recover_socrates_turn(
         "question_type_detail": "parse_recovery",
         "why_this_question": ["Response parsing failed; extracted best-effort question"],
         "ledger_update": ledger_update,
-        "stop_check": {
-            "done": False,
-            "criteria": []
-        },
+        "stop_check": {"done": False, "criteria": []},
         "_parse_error": True,
-        "_raw_response": text[:500]  # First 500 chars for debugging
+        "_raw_response": text[:500],  # First 500 chars for debugging
     }
 
     return best_effort, False, error

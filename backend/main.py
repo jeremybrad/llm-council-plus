@@ -1,32 +1,45 @@
 """FastAPI backend for LLM Council."""
 
+import asyncio
+import json
+import os
+import uuid
+from pathlib import Path
+from typing import Any
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-import os
-import uuid
-import json
-import asyncio
 
 from . import storage
-from .council import generate_conversation_title, generate_search_query, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, PROVIDERS
-from .search import perform_web_search, SearchProvider
-from .settings import get_settings, update_settings, Settings, DEFAULT_COUNCIL_MODELS, DEFAULT_CHAIRMAN_MODEL, AVAILABLE_MODELS
-from .roundtable import run_roundtable, get_default_council, AgentConfig
-from .modes import get_mode_runner, ModeRunner
-from .modes.socrates_runner import SocratesRunner
-from .modes.json_recovery import recover_socrates_turn
 from .api import claims_router
+from .council import (
+    PROVIDERS,
+    calculate_aggregate_rankings,
+    generate_conversation_title,
+    generate_search_query,
+    stage1_collect_responses,
+    stage2_collect_rankings,
+    stage3_synthesize_final,
+)
+from .modes import ModeRunner
+from .modes.socrates_runner import SocratesRunner
 from .openai_compat import (
     ChatCompletionRequest,
-    ChatCompletionResponse,
-    generate_openai_stream,
     generate_non_streaming_response,
-    get_available_models as get_roundtable_models
+    generate_openai_stream,
 )
-from pathlib import Path
+from .openai_compat import get_available_models as get_roundtable_models
+from .roundtable import get_default_council, run_roundtable
+from .search import SearchProvider, perform_web_search
+from .settings import (
+    AVAILABLE_MODELS,
+    DEFAULT_CHAIRMAN_MODEL,
+    DEFAULT_COUNCIL_MODELS,
+    get_settings,
+    update_settings,
+)
 
 app = FastAPI(
     title="LLM Council Plus API",
@@ -46,6 +59,7 @@ app = FastAPI(
 MODE_SESSIONS_DIR = Path(__file__).parent.parent / "data" / "mode_sessions"
 _mode_runner: ModeRunner | None = None
 
+
 def get_runner() -> ModeRunner:
     """Get or create the ModeRunner instance."""
     global _mode_runner
@@ -53,6 +67,7 @@ def get_runner() -> ModeRunner:
         _mode_runner = ModeRunner()
         _mode_runner.session_store.persist_dir = MODE_SESSIONS_DIR
     return _mode_runner
+
 
 # Enable CORS for local development and network access
 # Allow requests from any hostname on ports 517x (Vite), 3000 (CRA), 8080 (common dev)
@@ -70,11 +85,13 @@ app.include_router(claims_router)
 
 class CreateConversationRequest(BaseModel):
     """Request to create a new conversation."""
+
     pass
 
 
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
+
     content: str
     web_search: bool = False
     execution_mode: str = "full"  # 'chat_only', 'chat_ranking', 'full'
@@ -82,6 +99,7 @@ class SendMessageRequest(BaseModel):
 
 class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
+
     id: str
     created_at: str
     title: str
@@ -90,10 +108,11 @@ class ConversationMetadata(BaseModel):
 
 class Conversation(BaseModel):
     """Full conversation with all messages."""
+
     id: str
     created_at: str
     title: str
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
 
 
 @app.get("/")
@@ -102,7 +121,7 @@ async def root():
     return {"status": "ok", "service": "LLM Council API"}
 
 
-@app.get("/api/conversations", response_model=List[ConversationMetadata])
+@app.get("/api/conversations", response_model=list[ConversationMetadata])
 async def list_conversations():
     """List all conversations (metadata only)."""
     return storage.list_conversations()
@@ -140,11 +159,8 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
     # Validate execution_mode
     valid_modes = ["chat_only", "chat_ranking", "full", "roundtable"]
     if body.execution_mode not in valid_modes:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid execution_mode. Must be one of: {valid_modes}"
-        )
-    
+        raise HTTPException(status_code=400, detail=f"Invalid execution_mode. Must be one of: {valid_modes}")
+
     # Check if conversation exists
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
@@ -161,7 +177,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
             stage3_result = None
             label_to_model = {}
             aggregate_rankings = {}
-            
+
             # Add user message
             storage.add_user_message(conversation_id, body.content)
 
@@ -205,11 +221,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
 
                 # Run search (now fully async for Tavily/Brave, threaded only for DuckDuckGo)
                 search_result = await perform_web_search(
-                    search_query, 
-                    5, 
-                    provider, 
-                    settings.full_content_results,
-                    settings.search_keyword_extraction
+                    search_query, 5, provider, settings.full_content_results, settings.search_keyword_extraction
                 )
                 search_context = search_result["results"]
                 extracted_query = search_result["extracted_query"]
@@ -252,7 +264,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         num_rounds=num_rounds,
                         context=search_context,
                         max_parallel=max_parallel,
-                        request=request
+                        request=request,
                     ):
                         event_type = event.get("type")
 
@@ -315,7 +327,9 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                 # Note: run_data is captured on both completion (chair_complete) and abort (roundtable_aborted)
                 if run_data:
                     if aborted:
-                        print(f"Saving aborted roundtable run: {run_data.get('run_id')} (status: {run_data.get('status')})")
+                        print(
+                            f"Saving aborted roundtable run: {run_data.get('run_id')} (status: {run_data.get('status')})"
+                        )
                     # Persist full run data to data/runs/{conversation_id}/{run_id}.json
                     storage.save_run(run_data)
 
@@ -332,7 +346,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                             "chair_model": chair_model,
                             "search_context": search_context if search_context else None,
                             "search_query": search_query if search_query else None,
-                        }
+                        },
                     )
 
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
@@ -345,16 +359,16 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             await asyncio.sleep(0.05)
-            
+
             total_models = 0
-            
+
             async for item in stage1_collect_responses(body.content, search_context, request):
                 if isinstance(item, int):
                     total_models = item
                     print(f"DEBUG: Sending stage1_init with total={total_models}")
                     yield f"data: {json.dumps({'type': 'stage1_init', 'total': total_models})}\n\n"
                     continue
-                
+
                 stage1_results.append(item)
                 yield f"data: {json.dumps({'type': 'stage1_progress', 'data': item, 'count': len(stage1_results), 'total': total_models})}\n\n"
                 await asyncio.sleep(0.01)
@@ -363,29 +377,29 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
             await asyncio.sleep(0.05)
 
             # Check if any models responded successfully in Stage 1
-            if not any(r for r in stage1_results if not r.get('error')):
-                error_msg = 'All models failed to respond in Stage 1, likely due to rate limits or API errors. Please try again or adjust your model selection.'
+            if not any(r for r in stage1_results if not r.get("error")):
+                error_msg = "All models failed to respond in Stage 1, likely due to rate limits or API errors. Please try again or adjust your model selection."
                 storage.add_error_message(conversation_id, error_msg)
                 yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-                return # Stop further processing
+                return  # Stop further processing
 
             # Stage 2: Only if mode is 'chat_ranking' or 'full'
             if body.execution_mode in ["chat_ranking", "full"]:
                 yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
                 await asyncio.sleep(0.05)
-                
+
                 # Iterate over the async generator
                 async for item in stage2_collect_rankings(body.content, stage1_results, search_context, request):
                     # First item is the label mapping
-                    if isinstance(item, dict) and not item.get('model'):
+                    if isinstance(item, dict) and not item.get("model"):
                         label_to_model = item
                         # Send init event with total count
                         yield f"data: {json.dumps({'type': 'stage2_init', 'total': len(label_to_model)})}\n\n"
                         continue
-                    
+
                     # Subsequent items are results
                     stage2_results.append(item)
-                    
+
                     # Send progress update
                     print(f"Stage 2 Progress: {len(stage2_results)}/{len(label_to_model)} - {item['model']}")
                     yield f"data: {json.dumps({'type': 'stage2_progress', 'data': item, 'count': len(stage2_results), 'total': len(label_to_model)})}\n\n"
@@ -405,7 +419,9 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                     print("Client disconnected before Stage 3")
                     raise asyncio.CancelledError("Client disconnected")
 
-                stage3_result = await stage3_synthesize_final(body.content, stage1_results, stage2_results, search_context)
+                stage3_result = await stage3_synthesize_final(
+                    body.content, stage1_results, stage2_results, search_context
+                )
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -421,12 +437,12 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
             metadata = {
                 "execution_mode": body.execution_mode,  # Save mode for historical context
             }
-            
+
             # Only include stage2/stage3 metadata if they were executed
             if body.execution_mode in ["chat_ranking", "full"]:
                 metadata["label_to_model"] = label_to_model
                 metadata["aggregate_rankings"] = aggregate_rankings
-            
+
             if search_context:
                 metadata["search_context"] = search_context
             if search_query:
@@ -437,7 +453,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                 stage1_results,
                 stage2_results if body.execution_mode in ["chat_ranking", "full"] else None,
                 stage3_result if body.execution_mode == "full" else None,
-                metadata
+                metadata,
             )
 
             # Send completion event
@@ -468,63 +484,64 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-        }
+        },
     )
 
 
 class UpdateSettingsRequest(BaseModel):
     """Request to update settings."""
-    search_provider: Optional[str] = None
-    search_keyword_extraction: Optional[str] = None
-    ollama_base_url: Optional[str] = None
-    full_content_results: Optional[int] = None
+
+    search_provider: str | None = None
+    search_keyword_extraction: str | None = None
+    ollama_base_url: str | None = None
+    full_content_results: int | None = None
 
     # Custom OpenAI-compatible endpoint
-    custom_endpoint_name: Optional[str] = None
-    custom_endpoint_url: Optional[str] = None
-    custom_endpoint_api_key: Optional[str] = None
+    custom_endpoint_name: str | None = None
+    custom_endpoint_url: str | None = None
+    custom_endpoint_api_key: str | None = None
 
     # API Keys
-    tavily_api_key: Optional[str] = None
-    brave_api_key: Optional[str] = None
-    openrouter_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    anthropic_api_key: Optional[str] = None
-    google_api_key: Optional[str] = None
-    mistral_api_key: Optional[str] = None
-    deepseek_api_key: Optional[str] = None
-    groq_api_key: Optional[str] = None
+    tavily_api_key: str | None = None
+    brave_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
+    mistral_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    groq_api_key: str | None = None
 
     # Enabled Providers
-    enabled_providers: Optional[Dict[str, bool]] = None
-    direct_provider_toggles: Optional[Dict[str, bool]] = None
+    enabled_providers: dict[str, bool] | None = None
+    direct_provider_toggles: dict[str, bool] | None = None
 
     # Council Configuration (unified)
-    council_models: Optional[List[str]] = None
-    chairman_model: Optional[str] = None
-    
+    council_models: list[str] | None = None
+    chairman_model: str | None = None
+
     # Remote/Local filters
-    council_member_filters: Optional[Dict[int, str]] = None
-    chairman_filter: Optional[str] = None
-    search_query_filter: Optional[str] = None
+    council_member_filters: dict[int, str] | None = None
+    chairman_filter: str | None = None
+    search_query_filter: str | None = None
 
     # Temperature Settings
-    council_temperature: Optional[float] = None
-    chairman_temperature: Optional[float] = None
-    stage2_temperature: Optional[float] = None
+    council_temperature: float | None = None
+    chairman_temperature: float | None = None
+    stage2_temperature: float | None = None
 
     # Execution Mode
-    execution_mode: Optional[str] = None
+    execution_mode: str | None = None
 
     # System Prompts
-    stage1_prompt: Optional[str] = None
-    stage2_prompt: Optional[str] = None
-    stage3_prompt: Optional[str] = None
-
+    stage1_prompt: str | None = None
+    stage2_prompt: str | None = None
+    stage3_prompt: str | None = None
 
 
 class TestTavilyRequest(BaseModel):
     """Request to test Tavily API key."""
+
     api_key: str | None = None
 
 
@@ -537,12 +554,10 @@ async def get_app_settings():
         "search_keyword_extraction": settings.search_keyword_extraction,
         "ollama_base_url": settings.ollama_base_url,
         "full_content_results": settings.full_content_results,
-
         # Custom Endpoint
         "custom_endpoint_name": settings.custom_endpoint_name,
         "custom_endpoint_url": settings.custom_endpoint_url,
         # Don't send the API key to frontend for security
-
         # API Key Status
         "tavily_api_key_set": bool(settings.tavily_api_key),
         "brave_api_key_set": bool(settings.brave_api_key),
@@ -554,26 +569,21 @@ async def get_app_settings():
         "deepseek_api_key_set": bool(settings.deepseek_api_key),
         "groq_api_key_set": bool(settings.groq_api_key),
         "custom_endpoint_api_key_set": bool(settings.custom_endpoint_api_key),
-
         # Enabled Providers
         "enabled_providers": settings.enabled_providers,
         "direct_provider_toggles": settings.direct_provider_toggles,
-
         # Council Configuration (unified)
         "council_models": settings.council_models,
         "chairman_model": settings.chairman_model,
-        
         # Remote/Local filters
         "council_member_filters": settings.council_member_filters,
         "council_member_filters": settings.council_member_filters,
         "chairman_filter": settings.chairman_filter,
         "search_query_filter": settings.search_query_filter,
-
         # Temperature Settings
         "council_temperature": settings.council_temperature,
         "chairman_temperature": settings.chairman_temperature,
         "stage2_temperature": settings.stage2_temperature,
-
         # Prompts
         "stage1_prompt": settings.stage1_prompt,
         "stage2_prompt": settings.stage2_prompt,
@@ -581,17 +591,12 @@ async def get_app_settings():
     }
 
 
-
 @app.get("/api/settings/defaults")
 async def get_default_settings():
     """Get default model settings."""
-    from .prompts import (
-        STAGE1_PROMPT_DEFAULT,
-        STAGE2_PROMPT_DEFAULT,
-        STAGE3_PROMPT_DEFAULT,
-        TITLE_PROMPT_DEFAULT
-    )
+    from .prompts import STAGE1_PROMPT_DEFAULT, STAGE2_PROMPT_DEFAULT, STAGE3_PROMPT_DEFAULT
     from .settings import DEFAULT_ENABLED_PROVIDERS
+
     return {
         "council_models": DEFAULT_COUNCIL_MODELS,
         "chairman_model": DEFAULT_CHAIRMAN_MODEL,
@@ -614,16 +619,12 @@ async def update_app_settings(request: UpdateSettingsRequest):
             updates["search_provider"] = provider
         except ValueError:
             raise HTTPException(
-                status_code=400,
-                detail=f"Invalid search provider. Must be one of: {[p.value for p in SearchProvider]}"
+                status_code=400, detail=f"Invalid search provider. Must be one of: {[p.value for p in SearchProvider]}"
             )
 
     if request.search_keyword_extraction is not None:
         if request.search_keyword_extraction not in ["direct", "yake"]:
-             raise HTTPException(
-                status_code=400,
-                detail="Invalid keyword extraction mode. Must be 'direct' or 'yake'"
-            )
+            raise HTTPException(status_code=400, detail="Invalid keyword extraction mode. Must be 'direct' or 'yake'")
         updates["search_keyword_extraction"] = request.search_keyword_extraction
 
     if request.ollama_base_url is not None:
@@ -640,10 +641,7 @@ async def update_app_settings(request: UpdateSettingsRequest):
     if request.full_content_results is not None:
         # Validate range
         if request.full_content_results < 0 or request.full_content_results > 10:
-            raise HTTPException(
-                status_code=400,
-                detail="full_content_results must be between 0 and 10"
-            )
+            raise HTTPException(status_code=400, detail="full_content_results must be between 0 and 10")
         updates["full_content_results"] = request.full_content_results
 
     # Prompt updates
@@ -668,7 +666,7 @@ async def update_app_settings(request: UpdateSettingsRequest):
 
     if request.openrouter_api_key is not None:
         updates["openrouter_api_key"] = request.openrouter_api_key
-        
+
     # Direct Provider Keys
     if request.openai_api_key is not None:
         updates["openai_api_key"] = request.openai_api_key
@@ -694,20 +692,14 @@ async def update_app_settings(request: UpdateSettingsRequest):
     if request.council_models is not None:
         # Validate that at least two models are selected
         if len(request.council_models) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="At least two council models must be selected"
-            )
+            raise HTTPException(status_code=400, detail="At least two council models must be selected")
         if len(request.council_models) > 8:
-            raise HTTPException(
-                status_code=400,
-                detail="Maximum of 8 council models allowed"
-            )
+            raise HTTPException(status_code=400, detail="Maximum of 8 council models allowed")
         updates["council_models"] = request.council_models
 
     if request.chairman_model is not None:
         updates["chairman_model"] = request.chairman_model
-        
+
     # Remote/Local filters
     if request.council_member_filters is not None:
         updates["council_member_filters"] = request.council_member_filters
@@ -728,10 +720,7 @@ async def update_app_settings(request: UpdateSettingsRequest):
     if request.execution_mode is not None:
         valid_modes = ["chat_only", "chat_ranking", "full"]
         if request.execution_mode not in valid_modes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid execution_mode. Must be one of: {valid_modes}"
-            )
+            raise HTTPException(status_code=400, detail=f"Invalid execution_mode. Must be one of: {valid_modes}")
         updates["execution_mode"] = request.execution_mode
 
     if updates:
@@ -744,11 +733,9 @@ async def update_app_settings(request: UpdateSettingsRequest):
         "search_keyword_extraction": settings.search_keyword_extraction,
         "ollama_base_url": settings.ollama_base_url,
         "full_content_results": settings.full_content_results,
-
         # Custom Endpoint
         "custom_endpoint_name": settings.custom_endpoint_name,
         "custom_endpoint_url": settings.custom_endpoint_url,
-
         # API Key Status
         "tavily_api_key_set": bool(settings.tavily_api_key),
         "brave_api_key_set": bool(settings.brave_api_key),
@@ -760,19 +747,15 @@ async def update_app_settings(request: UpdateSettingsRequest):
         "deepseek_api_key_set": bool(settings.deepseek_api_key),
         "groq_api_key_set": bool(settings.groq_api_key),
         "custom_endpoint_api_key_set": bool(settings.custom_endpoint_api_key),
-
         # Enabled Providers
         "enabled_providers": settings.enabled_providers,
         "direct_provider_toggles": settings.direct_provider_toggles,
-
         # Council Configuration (unified)
         "council_models": settings.council_models,
         "chairman_model": settings.chairman_model,
-
         # Remote/Local filters
         "council_member_filters": settings.council_member_filters,
         "chairman_filter": settings.chairman_filter,
-
         # Prompts
         "stage1_prompt": settings.stage1_prompt,
         "stage2_prompt": settings.stage2_prompt,
@@ -784,12 +767,12 @@ async def update_app_settings(request: UpdateSettingsRequest):
 async def get_models():
     """Get available models for council selection."""
     from .openrouter import fetch_models
-    
+
     # Try dynamic fetch first
     dynamic_models = await fetch_models()
     if dynamic_models:
         return {"models": dynamic_models}
-        
+
     # Fallback to static list
     return {"models": AVAILABLE_MODELS}
 
@@ -798,20 +781,20 @@ async def get_models():
 async def get_direct_models():
     """Get available models from all configured direct providers."""
     all_models = []
-    
+
     # Iterate over all providers
     for provider_id, provider in PROVIDERS.items():
         # Skip OpenRouter and Ollama as they are handled separately
         if provider_id in ["openrouter", "ollama", "hybrid"]:
             continue
-            
+
         try:
             # Fetch models from provider
             models = await provider.get_models()
             all_models.extend(models)
         except Exception as e:
             print(f"Error fetching models for {provider_id}: {e}")
-            
+
     return all_models
 
 
@@ -819,6 +802,7 @@ async def get_direct_models():
 async def test_tavily_api(request: TestTavilyRequest):
     """Test Tavily API key with a simple search."""
     import httpx
+
     settings = get_settings()
 
     try:
@@ -848,6 +832,7 @@ async def test_tavily_api(request: TestTavilyRequest):
 
 class TestBraveRequest(BaseModel):
     """Request to test Brave API key."""
+
     api_key: str | None = None
 
 
@@ -855,6 +840,7 @@ class TestBraveRequest(BaseModel):
 async def test_brave_api(request: TestBraveRequest):
     """Test Brave API key with a simple search."""
     import httpx
+
     settings = get_settings()
 
     try:
@@ -884,11 +870,13 @@ async def test_brave_api(request: TestBraveRequest):
 
 class TestOpenRouterRequest(BaseModel):
     """Request to test OpenRouter API key."""
-    api_key: Optional[str] = None
+
+    api_key: str | None = None
 
 
 class TestProviderRequest(BaseModel):
     """Request to test a specific provider's API key."""
+
     provider_id: str
     api_key: str
 
@@ -898,10 +886,10 @@ async def test_provider_api(request: TestProviderRequest):
     """Test an API key for a specific provider."""
     from .council import PROVIDERS
     from .settings import get_settings
-    
+
     if request.provider_id not in PROVIDERS:
         raise HTTPException(status_code=400, detail="Invalid provider ID")
-        
+
     api_key = request.api_key
     if not api_key:
         # Try to get from settings
@@ -909,10 +897,10 @@ async def test_provider_api(request: TestProviderRequest):
         # Map provider_id to setting key (e.g. 'openai' -> 'openai_api_key')
         setting_key = f"{request.provider_id}_api_key"
         if hasattr(settings, setting_key):
-             api_key = getattr(settings, setting_key)
-    
+            api_key = getattr(settings, setting_key)
+
     if not api_key:
-         return {"success": False, "message": "No API key provided or configured"}
+        return {"success": False, "message": "No API key provided or configured"}
 
     provider = PROVIDERS[request.provider_id]
     return await provider.validate_key(api_key)
@@ -920,44 +908,48 @@ async def test_provider_api(request: TestProviderRequest):
 
 class TestOllamaRequest(BaseModel):
     """Request to test Ollama connection."""
+
     base_url: str
 
 
 @app.get("/api/ollama/tags")
-async def get_ollama_tags(base_url: Optional[str] = None):
+async def get_ollama_tags(base_url: str | None = None):
     """Fetch available models from Ollama."""
     import httpx
+
     from .config import get_ollama_base_url
-    
+
     if not base_url:
         base_url = get_ollama_base_url()
-        
-    if base_url.endswith('/'):
+
+    if base_url.endswith("/"):
         base_url = base_url[:-1]
-        
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{base_url}/api/tags")
-            
+
             if response.status_code != 200:
                 return {"models": [], "error": f"Ollama API error: {response.status_code}"}
-                
+
             data = response.json()
             models = []
             for model in data.get("models", []):
-                models.append({
-                    "id": model.get("name"),
-                    "name": model.get("name"),
-                    # Ollama doesn't return context length in tags
-                    "context_length": None,
-                    "is_free": True,
-                    "modified_at": model.get("modified_at")
-                })
-                
+                models.append(
+                    {
+                        "id": model.get("name"),
+                        "name": model.get("name"),
+                        # Ollama doesn't return context length in tags
+                        "context_length": None,
+                        "is_free": True,
+                        "modified_at": model.get("modified_at"),
+                    }
+                )
+
             # Sort by modified_at (newest first), fallback to name
             models.sort(key=lambda x: x.get("modified_at", ""), reverse=True)
             return {"models": models}
-            
+
     except httpx.ConnectError:
         return {"models": [], "error": "Could not connect to Ollama. Is it running?"}
     except Exception as e:
@@ -968,20 +960,20 @@ async def get_ollama_tags(base_url: Optional[str] = None):
 async def test_ollama_connection(request: TestOllamaRequest):
     """Test connection to Ollama instance."""
     import httpx
-    
+
     base_url = request.base_url
-    if base_url.endswith('/'):
+    if base_url.endswith("/"):
         base_url = base_url[:-1]
-        
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{base_url}/api/tags")
-            
+
             if response.status_code == 200:
                 return {"success": True, "message": "Successfully connected to Ollama"}
             else:
                 return {"success": False, "message": f"Ollama API error: {response.status_code}"}
-                
+
     except httpx.ConnectError:
         return {"success": False, "message": "Could not connect to Ollama. Is it running at this URL?"}
     except Exception as e:
@@ -990,9 +982,10 @@ async def test_ollama_connection(request: TestOllamaRequest):
 
 class TestCustomEndpointRequest(BaseModel):
     """Request to test custom OpenAI-compatible endpoint."""
+
     name: str
     url: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
 
 @app.post("/api/settings/test-custom-endpoint")
@@ -1023,6 +1016,7 @@ async def get_custom_endpoint_models():
 async def get_openrouter_models():
     """Fetch available models from OpenRouter API."""
     import httpx
+
     from .config import get_openrouter_api_key
 
     api_key = get_openrouter_api_key()
@@ -1041,17 +1035,26 @@ async def get_openrouter_models():
 
             data = response.json()
             models = []
-            
+
             # Comprehensive exclusion list for non-text/chat models
             excluded_terms = [
-                "embed", "audio", "whisper", "tts", "dall-e", "realtime", 
-                "vision-only", "voxtral", "speech", "transcribe", "sora"
+                "embed",
+                "audio",
+                "whisper",
+                "tts",
+                "dall-e",
+                "realtime",
+                "vision-only",
+                "voxtral",
+                "speech",
+                "transcribe",
+                "sora",
             ]
 
             for model in data.get("data", []):
                 mid = model.get("id", "").lower()
                 name_lower = model.get("name", "").lower()
-                
+
                 if any(term in mid for term in excluded_terms) or any(term in name_lower for term in excluded_terms):
                     continue
 
@@ -1061,13 +1064,15 @@ async def get_openrouter_models():
                 completion_price = float(pricing.get("completion", "0") or "0")
                 is_free = prompt_price == 0 and completion_price == 0
 
-                models.append({
-                    "id": f"openrouter:{model.get('id')}",
-                    "name": f"{model.get('name', model.get('id'))} [OpenRouter]",
-                    "provider": "OpenRouter",
-                    "context_length": model.get("context_length"),
-                    "is_free": is_free,
-                })
+                models.append(
+                    {
+                        "id": f"openrouter:{model.get('id')}",
+                        "name": f"{model.get('name', model.get('id'))} [OpenRouter]",
+                        "provider": "OpenRouter",
+                        "context_length": model.get("context_length"),
+                        "is_free": is_free,
+                    }
+                )
 
             # Sort by name
             models.sort(key=lambda x: x["name"].lower())
@@ -1083,6 +1088,7 @@ async def get_openrouter_models():
 async def test_openrouter_api(request: TestOpenRouterRequest):
     """Test OpenRouter API key with a simple request."""
     import httpx
+
     from .config import get_openrouter_api_key
 
     # Use provided key or fall back to saved key
@@ -1117,22 +1123,26 @@ async def test_openrouter_api(request: TestOpenRouterRequest):
 # MODE ENGINE API ENDPOINTS
 # ========================================
 
+
 class CreateModeSessionRequest(BaseModel):
     """Request to create a new mode session."""
+
     mode_id: str
-    initial_inquiry: Optional[str] = None
-    model: Optional[str] = None
-    max_turns: Optional[int] = None
+    initial_inquiry: str | None = None
+    model: str | None = None
+    max_turns: int | None = None
 
 
 class ModeTurnRequest(BaseModel):
     """Request to run a mode turn."""
+
     session_id: str
     user_message: str
 
 
 class ModeSummaryRequest(BaseModel):
     """Request to generate a mode summary."""
+
     session_id: str
 
 
@@ -1235,12 +1245,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
         # Query the model
         start_time = asyncio.get_event_loop().time()
         try:
-            response = await query_model(
-                model=model,
-                messages=messages,
-                timeout=120.0,
-                temperature=0.7
-            )
+            response = await query_model(model=model, messages=messages, timeout=120.0, temperature=0.7)
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Model query failed: {str(e)}")
@@ -1273,7 +1278,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
             "parse_success": result["success"],
             "parse_error": result.get("error"),
             "stop_recommended": stop_recommended,
-            "criteria_met": criteria_met
+            "criteria_met": criteria_met,
         }
 
         # Update session
@@ -1283,7 +1288,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
             messages=session.messages,
             turn_receipt=turn_receipt,
             stop_recommended=stop_recommended,
-            stop_criteria_met=criteria_met
+            stop_criteria_met=criteria_met,
         )
 
         # Build response - use updated_session for correct turn_count
@@ -1295,7 +1300,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
                 "question_type": output.get("question_type"),
                 "question_type_detail": output.get("question_type_detail"),
                 "why_this_question": output.get("why_this_question"),
-                "stop_check": output.get("stop_check")
+                "stop_check": output.get("stop_check"),
             },
             "ledger_active_view": runner.get_active_ledger_view(updated_session.ledger),
             "stop_recommended": stop_recommended,
@@ -1303,7 +1308,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
             "parse_error": result.get("error"),
             "session_status": updated_session.status,
             "turns_remaining": updated_session.max_turns - updated_session.turn_count,
-            "session": updated_session.to_dict()
+            "session": updated_session.to_dict(),
         }
     else:
         raise HTTPException(status_code=400, detail=f"Mode '{mode_id}' does not support interactive turns")
@@ -1338,16 +1343,11 @@ async def stop_mode_session(mode_id: str, request: ModeSummaryRequest):
         # Query for summary
         messages = [
             {"role": "system", "content": socrates_runner.system_prompt},
-            {"role": "user", "content": summary_prompt}
+            {"role": "user", "content": summary_prompt},
         ]
 
         try:
-            response = await query_model(
-                model=model,
-                messages=messages,
-                timeout=120.0,
-                temperature=0.5
-            )
+            response = await query_model(model=model, messages=messages, timeout=120.0, temperature=0.5)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
 
@@ -1355,6 +1355,7 @@ async def stop_mode_session(mode_id: str, request: ModeSummaryRequest):
 
         # Parse summary (also uses JSON recovery)
         from .modes.json_recovery import parse_json
+
         parsed_summary, error = parse_json(raw_summary)
 
         # Mark session as completed
@@ -1367,7 +1368,7 @@ async def stop_mode_session(mode_id: str, request: ModeSummaryRequest):
             "summary": parsed_summary or {"raw": raw_summary},
             "parse_error": error,
             "final_ledger": session.ledger,
-            "final_ledger_active_view": runner.get_active_ledger_view(session.ledger)
+            "final_ledger_active_view": runner.get_active_ledger_view(session.ledger),
         }
     else:
         raise HTTPException(status_code=400, detail=f"Mode '{mode_id}' does not support stop summary")
@@ -1419,16 +1420,14 @@ async def get_fallacy(fallacy_id: str):
 # These endpoints allow OpenWebUI and other OpenAI-compatible
 # clients to use Roundtable Mode as a selectable "model".
 
+
 @app.get("/v1/models")
 async def list_openai_models():
     """List available models (OpenAI-compatible).
 
     Returns Roundtable variants as available models.
     """
-    return {
-        "object": "list",
-        "data": get_roundtable_models()
-    }
+    return {"object": "list", "data": get_roundtable_models()}
 
 
 @app.post("/v1/chat/completions")
@@ -1460,7 +1459,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",  # Disable nginx buffering
-            }
+            },
         )
     else:
         response = await generate_non_streaming_response(body, request)
@@ -1469,4 +1468,5 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8002)

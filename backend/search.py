@@ -1,19 +1,19 @@
 """Web search module with multiple provider support."""
 
-from ddgs import DDGS
-from typing import List, Dict, Optional
-from enum import Enum
+import asyncio
 import logging
-import httpx
 import os
 import time
-import asyncio
+from enum import Enum
+
+import httpx
 import yake
+from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
 # YAKE keyword extractor configuration
-_keyword_extractor: Optional[yake.KeywordExtractor] = None
+_keyword_extractor: yake.KeywordExtractor | None = None
 
 
 def get_keyword_extractor() -> yake.KeywordExtractor:
@@ -21,12 +21,12 @@ def get_keyword_extractor() -> yake.KeywordExtractor:
     global _keyword_extractor
     if _keyword_extractor is None:
         _keyword_extractor = yake.KeywordExtractor(
-            lan="en",           # Language
-            n=3,                # Max n-gram size (up to 3-word phrases)
-            dedupLim=0.3,       # Stricter deduplication
-            dedupFunc='seqm',   # Sequence matcher for dedup
-            top=20,             # Extract more candidates, we'll filter
-            features=None       # Use default features
+            lan="en",  # Language
+            n=3,  # Max n-gram size (up to 3-word phrases)
+            dedupLim=0.3,  # Stricter deduplication
+            dedupFunc="seqm",  # Sequence matcher for dedup
+            top=20,  # Extract more candidates, we'll filter
+            features=None,  # Use default features
         )
     return _keyword_extractor
 
@@ -34,32 +34,100 @@ def get_keyword_extractor() -> yake.KeywordExtractor:
 # Noise words/phrases to filter out from extracted keywords
 NOISE_WORDS = {
     # Action words from prompts
-    'act', 'based', 'please', 'help', 'want', 'need', 'know', 'tell',
-    'explain', 'describe', 'give', 'provide', 'show', 'make', 'create',
+    "act",
+    "based",
+    "please",
+    "help",
+    "want",
+    "need",
+    "know",
+    "tell",
+    "explain",
+    "describe",
+    "give",
+    "provide",
+    "show",
+    "make",
+    "create",
     # Analysis terms
-    'question', 'answer', 'think', 'believe', 'consider', 'evaluate',
-    'analyze', 'compare', 'discuss', 'strongest', 'arguments', 'theory',
+    "question",
+    "answer",
+    "think",
+    "believe",
+    "consider",
+    "evaluate",
+    "analyze",
+    "compare",
+    "discuss",
+    "strongest",
+    "arguments",
+    "theory",
     # Time/context noise
-    'current', 'late', 'early', 'recent', 'today', 'now',
+    "current",
+    "late",
+    "early",
+    "recent",
+    "today",
+    "now",
     # Common filler
-    'like', 'using', 'use', 'way', 'things', 'something',
+    "like",
+    "using",
+    "use",
+    "way",
+    "things",
+    "something",
     # Prepositions/articles (YAKE sometimes includes these)
-    'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or'
+    "the",
+    "a",
+    "an",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "and",
+    "or",
 }
 
 # Phrases that should be filtered entirely
 NOISE_PHRASES = {
-    'market in late', 'analyst and evaluate', 'evaluate the theory',
-    'compare the current', 'based on the', 'act as a', 'tell me about',
-    'current market', 'late 2025', 'early 2025', 'in 2025', 'in 2024'
+    "market in late",
+    "analyst and evaluate",
+    "evaluate the theory",
+    "compare the current",
+    "based on the",
+    "act as a",
+    "tell me about",
+    "current market",
+    "late 2025",
+    "early 2025",
+    "in 2025",
+    "in 2024",
 }
 
 # Role-play job titles to filter (common in "act as a..." prompts)
 ROLE_PLAY_TITLES = {
-    'financial analyst', 'data analyst', 'business analyst', 'market analyst',
-    'research analyst', 'investment analyst', 'senior analyst', 'junior analyst',
-    'expert', 'specialist', 'consultant', 'advisor', 'professor', 'scientist',
-    'economist', 'strategist', 'researcher', 'journalist', 'writer', 'editor'
+    "financial analyst",
+    "data analyst",
+    "business analyst",
+    "market analyst",
+    "research analyst",
+    "investment analyst",
+    "senior analyst",
+    "junior analyst",
+    "expert",
+    "specialist",
+    "consultant",
+    "advisor",
+    "professor",
+    "scientist",
+    "economist",
+    "strategist",
+    "researcher",
+    "journalist",
+    "writer",
+    "editor",
 }
 
 
@@ -69,22 +137,28 @@ def _preprocess_query(query: str) -> str:
     This prevents YAKE from extracting words from these phrases.
     """
     import re
+
     cleaned = query
 
     # Remove role-play patterns like "act as a financial analyst"
     # This catches variations like "act as an expert", "acting as a consultant", etc.
-    cleaned = re.sub(r'\b(act(ing)?|behave|pretend|imagine you are|you are|be) as (a|an|the)?\s*\w+(\s+\w+)?\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"\b(act(ing)?|behave|pretend|imagine you are|you are|be) as (a|an|the)?\s*\w+(\s+\w+)?\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
 
     # Remove specific role-play titles
     for title in ROLE_PLAY_TITLES:
-        cleaned = re.sub(rf'\b{re.escape(title)}\b', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"\b{re.escape(title)}\b", "", cleaned, flags=re.IGNORECASE)
 
     # Remove noise phrases
     for phrase in NOISE_PHRASES:
-        cleaned = re.sub(rf'\b{re.escape(phrase)}\b', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"\b{re.escape(phrase)}\b", "", cleaned, flags=re.IGNORECASE)
 
     # Clean up extra whitespace
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     return cleaned
 
@@ -169,6 +243,7 @@ def extract_search_keywords(query: str, max_keywords: int = 6) -> str:
         logger.warning(f"YAKE keyword extraction failed: {e}, using original query")
         return query.strip()
 
+
 # Rate limit handling
 MAX_RETRIES = 2
 RETRY_DELAY = 2  # seconds
@@ -177,8 +252,8 @@ RETRY_DELAY = 2  # seconds
 SEARCH_TIMEOUT_BUDGET = 60  # seconds total
 
 # Persistent HTTP clients for connection pooling
-_async_client: Optional[httpx.AsyncClient] = None
-_sync_client: Optional[httpx.Client] = None
+_async_client: httpx.AsyncClient | None = None
+_sync_client: httpx.Client | None = None
 
 
 def get_async_client() -> httpx.AsyncClient:
@@ -208,8 +283,8 @@ async def perform_web_search(
     max_results: int = 5,
     provider: SearchProvider = SearchProvider.DUCKDUCKGO,
     full_content_results: int = 3,
-    keyword_extraction: str = "direct"
-) -> Dict[str, str]:
+    keyword_extraction: str = "direct",
+) -> dict[str, str]:
     """
     Perform a web search using the specified provider.
 
@@ -243,7 +318,7 @@ async def perform_web_search(
         logger.error(f"Error performing web search with {provider}: {str(e)}")
         return {
             "results": "[System Note: Web search was attempted but failed. Please answer based on your internal knowledge.]",
-            "extracted_query": extracted_query
+            "extracted_query": extracted_query,
         }
 
 
@@ -263,22 +338,17 @@ def _search_duckduckgo(query: str, max_results: int = 5, full_content_results: i
                 search_results = list(ddgs.text(query, max_results=max_results))
 
                 for i, result in enumerate(search_results, 1):
-                    title = result.get('title', 'No Title')
-                    href = result.get('url', result.get('href', '#'))
-                    body = result.get('body', result.get('excerpt', 'No description available.'))
-                    source = result.get('source', '')
+                    title = result.get("title", "No Title")
+                    href = result.get("url", result.get("href", "#"))
+                    body = result.get("body", result.get("excerpt", "No description available."))
+                    source = result.get("source", "")
 
-                    search_results_data.append({
-                        'index': i,
-                        'title': title,
-                        'url': href,
-                        'source': source,
-                        'summary': body,
-                        'content': None
-                    })
+                    search_results_data.append(
+                        {"index": i, "title": title, "url": href, "source": source, "summary": body, "content": None}
+                    )
 
                     # Queue top N results for full content fetch
-                    if full_content_results > 0 and i <= full_content_results and href and href != '#':
+                    if full_content_results > 0 and i <= full_content_results and href and href != "#":
                         urls_to_fetch.append((i - 1, href))
                 break  # Success, exit retry loop
 
@@ -296,7 +366,7 @@ def _search_duckduckgo(query: str, max_results: int = 5, full_content_results: i
         remaining = SEARCH_TIMEOUT_BUDGET - elapsed
 
         if remaining <= 5:  # Need at least 5s to fetch content
-            logger.warning(f"Search timeout budget exhausted, skipping remaining content fetches")
+            logger.warning("Search timeout budget exhausted, skipping remaining content fetches")
             break
 
         # Use remaining time as timeout for this fetch (sync version for DuckDuckGo)
@@ -305,9 +375,9 @@ def _search_duckduckgo(query: str, max_results: int = 5, full_content_results: i
             # If content is very short (likely paywall/cookie wall/failed parse),
             # append the original summary to ensure we have some info.
             if len(content) < 500:
-                original_summary = search_results_data[idx]['summary']
+                original_summary = search_results_data[idx]["summary"]
                 content += f"\n\n[System Note: Full content fetch yielded limited text. Appending original summary.]\nOriginal Summary: {original_summary}"
-            search_results_data[idx]['content'] = content
+            search_results_data[idx]["content"] = content
 
     if not search_results_data:
         return "No web search results found."
@@ -316,12 +386,12 @@ def _search_duckduckgo(query: str, max_results: int = 5, full_content_results: i
     formatted = []
     for r in search_results_data:
         text = f"Result {r['index']}:\nTitle: {r['title']}\nURL: {r['url']}"
-        if r['source']:
+        if r["source"]:
             text += f"\nSource: {r['source']}"
-        if r['content']:
+        if r["content"]:
             # Truncate content to ~2000 chars
-            content = r['content'][:2000]
-            if len(r['content']) > 2000:
+            content = r["content"][:2000]
+            if len(r["content"]) > 2000:
                 content += "..."
             text += f"\nContent:\n{content}"
         else:
@@ -331,7 +401,7 @@ def _search_duckduckgo(query: str, max_results: int = 5, full_content_results: i
     return "\n\n".join(formatted)
 
 
-def _fetch_with_jina_sync(url: str, timeout: float = 25.0) -> Optional[str]:
+def _fetch_with_jina_sync(url: str, timeout: float = 25.0) -> str | None:
     """
     Fetch article content using Jina Reader API (sync version for DuckDuckGo).
     Returns clean markdown content. Uses connection pooling.
@@ -339,9 +409,13 @@ def _fetch_with_jina_sync(url: str, timeout: float = 25.0) -> Optional[str]:
     try:
         jina_url = f"https://r.jina.ai/{url}"
         client = get_sync_client()
-        response = client.get(jina_url, headers={
-            "Accept": "text/plain",
-        }, timeout=timeout)
+        response = client.get(
+            jina_url,
+            headers={
+                "Accept": "text/plain",
+            },
+            timeout=timeout,
+        )
         if response.status_code == 200:
             return response.text
         else:
@@ -355,7 +429,7 @@ def _fetch_with_jina_sync(url: str, timeout: float = 25.0) -> Optional[str]:
         return None
 
 
-async def _fetch_with_jina(url: str, timeout: float = 25.0) -> Optional[str]:
+async def _fetch_with_jina(url: str, timeout: float = 25.0) -> str | None:
     """
     Fetch article content using Jina Reader API (async).
     Returns clean markdown content. Uses connection pooling.
@@ -363,9 +437,13 @@ async def _fetch_with_jina(url: str, timeout: float = 25.0) -> Optional[str]:
     try:
         jina_url = f"https://r.jina.ai/{url}"
         client = get_async_client()
-        response = await client.get(jina_url, headers={
-            "Accept": "text/plain",
-        }, timeout=timeout)
+        response = await client.get(
+            jina_url,
+            headers={
+                "Accept": "text/plain",
+            },
+            timeout=timeout,
+        )
         if response.status_code == 200:
             return response.text
         else:
@@ -469,16 +547,12 @@ async def _search_brave(query: str, max_results: int = 5, full_content_results: 
             if extra:
                 description += "\n" + "\n".join(extra[:2])
 
-            search_results_data.append({
-                'index': i,
-                'title': title,
-                'url': url,
-                'summary': description,
-                'content': None
-            })
+            search_results_data.append(
+                {"index": i, "title": title, "url": url, "summary": description, "content": None}
+            )
 
             # Queue top N results for full content fetch
-            if full_content_results > 0 and i <= full_content_results and url and url != '#':
+            if full_content_results > 0 and i <= full_content_results and url and url != "#":
                 urls_to_fetch.append((i - 1, url))
 
         # Fetch full content via Jina Reader for top results
@@ -488,7 +562,7 @@ async def _search_brave(query: str, max_results: int = 5, full_content_results: 
             remaining = SEARCH_TIMEOUT_BUDGET - elapsed
 
             if remaining <= 5:  # Need at least 5s to fetch content
-                logger.warning(f"Search timeout budget exhausted, skipping remaining content fetches")
+                logger.warning("Search timeout budget exhausted, skipping remaining content fetches")
                 break
 
             # Use remaining time as timeout for this fetch
@@ -496,9 +570,9 @@ async def _search_brave(query: str, max_results: int = 5, full_content_results: 
             if content:
                 # If content is very short, append summary
                 if len(content) < 500:
-                    original_summary = search_results_data[idx]['summary']
+                    original_summary = search_results_data[idx]["summary"]
                     content += f"\n\n[System Note: Full content fetch yielded limited text. Appending original summary.]\nOriginal Summary: {original_summary}"
-                search_results_data[idx]['content'] = content
+                search_results_data[idx]["content"] = content
 
         if not search_results_data:
             return "No web search results found."
@@ -507,10 +581,10 @@ async def _search_brave(query: str, max_results: int = 5, full_content_results: 
         formatted = []
         for r in search_results_data:
             text = f"Result {r['index']}:\nTitle: {r['title']}\nURL: {r['url']}"
-            if r['content']:
+            if r["content"]:
                 # Truncate content to ~2000 chars
-                content = r['content'][:2000]
-                if len(r['content']) > 2000:
+                content = r["content"][:2000]
+                if len(r["content"]) > 2000:
                     content += "..."
                 text += f"\nContent:\n{content}"
             else:

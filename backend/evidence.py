@@ -16,19 +16,12 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
 
 from .claims import Evidence
 
-
 # Path to SADB CLI module - configurable via environment variable
 # Defaults to ~/SyncedProjects/C003_sadb_canonical/50_cli if not set
-SADB_CLI_PATH = Path(
-    os.environ.get(
-        "SADB_CLI_PATH",
-        str(Path.home() / "SyncedProjects/C003_sadb_canonical/50_cli")
-    )
-)
+SADB_CLI_PATH = Path(os.environ.get("SADB_CLI_PATH", str(Path.home() / "SyncedProjects/C003_sadb_canonical/50_cli")))
 
 # Neo4j connection URI - configurable via environment variable
 # Defaults to localhost for host machine (not Docker)
@@ -47,6 +40,7 @@ def _check_sadb_available() -> bool:
     sys.path.insert(0, str(SADB_CLI_PATH))
     try:
         from sadb_retrieve import retrieve  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -70,7 +64,7 @@ def _do_sadb_retrieve(query: str, top_k: int):
     """
     sys.path.insert(0, str(SADB_CLI_PATH))
     try:
-        from sadb_retrieve import retrieve, RetrieveOptions
+        from sadb_retrieve import RetrieveOptions, retrieve
 
         opts = RetrieveOptions(
             candidate_mode="hybrid+fts",
@@ -87,7 +81,7 @@ def _do_sadb_retrieve(query: str, top_k: int):
             sys.path.remove(str(SADB_CLI_PATH))
 
 
-async def search_evidence(query: str, top_k: int = 5) -> List[Evidence]:
+async def search_evidence(query: str, top_k: int = 5) -> list[Evidence]:
     """Search SADB for evidence supporting/contradicting a claim.
 
     Uses asyncio.to_thread() to avoid blocking the event loop.
@@ -113,72 +107,76 @@ async def search_evidence(query: str, top_k: int = 5) -> List[Evidence]:
     now = datetime.now(timezone.utc).isoformat()
 
     # Process windows (transcript evidence)
-    windows = getattr(bundle, 'windows', []) or []
+    windows = getattr(bundle, "windows", []) or []
     for window in windows:
         try:
             # Extract snippet
             snippet = ""
-            if hasattr(window, 'snippet'):
+            if hasattr(window, "snippet"):
                 snippet = window.snippet[:500] if window.snippet else ""
 
             # Extract provenance
-            provenance = getattr(window, 'provenance', {}) or {}
+            provenance = getattr(window, "provenance", {}) or {}
             conversation_id = provenance.get("conversation_id", "")
             span_start = provenance.get("span_start")
             span_end = provenance.get("span_end")
 
             # Extract score
-            score_components = getattr(window, 'score_components', {}) or {}
+            score_components = getattr(window, "score_components", {}) or {}
             weight = score_components.get("vector", 0.5)
 
-            evidence.append(Evidence(
-                evidence_id=str(uuid.uuid4()),
-                source_type="transcript",
-                source_id=conversation_id,
-                quote=snippet,
-                support="neutral",  # To be classified by scorer
-                weight=weight,
-                retrieved_at=now,
-                retrieval_query=query,
-                span_start=span_start,
-                span_end=span_end,
-                source_hash=hashlib.sha256(snippet.encode()).hexdigest()[:16] if snippet else None,
-            ))
+            evidence.append(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    source_type="transcript",
+                    source_id=conversation_id,
+                    quote=snippet,
+                    support="neutral",  # To be classified by scorer
+                    weight=weight,
+                    retrieved_at=now,
+                    retrieval_query=query,
+                    span_start=span_start,
+                    span_end=span_end,
+                    source_hash=hashlib.sha256(snippet.encode()).hexdigest()[:16] if snippet else None,
+                )
+            )
         except Exception as e:
             print(f"Error processing window: {e}")
             continue
 
     # Process facts (J1 fact evidence)
-    facts = getattr(bundle, 'facts', []) or []
+    facts = getattr(bundle, "facts", []) or []
     for fact in facts:
         try:
             # Extract claim text
-            if hasattr(fact, 'claim_text'):
+            if hasattr(fact, "claim_text"):
                 claim_text = fact.claim_text
             else:
                 claim_text = str(fact)
 
             # Extract fact ID
-            fact_id = getattr(fact, 'fact_id', "") or ""
+            fact_id = getattr(fact, "fact_id", "") or ""
 
             # Extract confidence
-            confidence = getattr(fact, 'confidence', 0.7)
+            confidence = getattr(fact, "confidence", 0.7)
             if confidence is None:
                 confidence = 0.7
 
-            evidence.append(Evidence(
-                evidence_id=str(uuid.uuid4()),
-                source_type="j1_fact",
-                source_id=fact_id,
-                quote=claim_text,
-                support="supports",  # J1 facts are pre-extracted claims, default to supports
-                weight=confidence,
-                retrieved_at=now,
-                retrieval_query=query,
-                span_start=None,
-                span_end=None,
-                source_hash=hashlib.sha256(claim_text.encode()).hexdigest()[:16] if claim_text else None,
-            ))
+            evidence.append(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    source_type="j1_fact",
+                    source_id=fact_id,
+                    quote=claim_text,
+                    support="supports",  # J1 facts are pre-extracted claims, default to supports
+                    weight=confidence,
+                    retrieved_at=now,
+                    retrieval_query=query,
+                    span_start=None,
+                    span_end=None,
+                    source_hash=hashlib.sha256(claim_text.encode()).hexdigest()[:16] if claim_text else None,
+                )
+            )
         except Exception as e:
             print(f"Error processing fact: {e}")
             continue
@@ -186,7 +184,7 @@ async def search_evidence(query: str, top_k: int = 5) -> List[Evidence]:
     return evidence
 
 
-async def get_document(source_id: str) -> Optional[str]:
+async def get_document(source_id: str) -> str | None:
     """Retrieve full document text for deep inspection.
 
     This is a placeholder for v2 implementation that would retrieve
@@ -205,7 +203,7 @@ async def get_document(source_id: str) -> Optional[str]:
     return None
 
 
-def _check_neo4j_driver_available() -> tuple[bool, Optional[str]]:
+def _check_neo4j_driver_available() -> tuple[bool, str | None]:
     """Check if neo4j Python driver is installed.
 
     Returns:
@@ -213,12 +211,13 @@ def _check_neo4j_driver_available() -> tuple[bool, Optional[str]]:
     """
     try:
         import neo4j  # noqa: F401
+
         return True, None
     except ImportError as e:
         return False, f"neo4j driver not installed: {e}"
 
 
-def _check_neo4j_connectivity() -> tuple[bool, Optional[str]]:
+def _check_neo4j_connectivity() -> tuple[bool, str | None]:
     """Check if Neo4j is reachable with a simple ping query.
 
     Returns:

@@ -10,23 +10,23 @@ Key features:
 """
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..preflight import PreflightInfo
-from ..job_registry import register_job
-from .base import BaseJob, JobResult, JobStatus
 from ..claims import (
-    get_claims_for_review,
-    get_claim,
-    update_claim,
-    add_evidence,
     Claim,
+    add_evidence,
+    get_claim,
+    get_claims_for_review,
+    update_claim,
 )
-from ..evidence import search_evidence, get_sadb_status
-from ..scorer import classify_support, calculate_confidence_with_breakdown
+from ..evidence import get_sadb_status, search_evidence
+from ..job_registry import register_job
+from ..preflight import PreflightInfo
+from ..scorer import classify_support
+from .base import BaseJob, JobResult, JobStatus
 
 
 @dataclass
@@ -35,18 +35,19 @@ class ValidationCheckpoint:
 
     Stored between runs to allow resumption after interruption.
     """
+
     job_run_id: str
-    claims_to_process: List[str]  # claim_ids
-    claims_processed: List[str]
+    claims_to_process: list[str]  # claim_ids
+    claims_processed: list[str]
     started_at: str
     last_updated: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ValidationCheckpoint":
+    def from_dict(cls, data: dict[str, Any]) -> "ValidationCheckpoint":
         """Create from dictionary."""
         return cls(**data)
 
@@ -71,13 +72,13 @@ class TruthValidationJob(BaseJob):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.checkpoint: Optional[ValidationCheckpoint] = None
+        self.checkpoint: ValidationCheckpoint | None = None
 
     def _get_checkpoint_path(self) -> Path:
         """Get path to checkpoint file."""
         return self.data_dir / self.CHECKPOINT_FILE
 
-    def _load_checkpoint(self) -> Optional[ValidationCheckpoint]:
+    def _load_checkpoint(self) -> ValidationCheckpoint | None:
         """Load existing checkpoint if resuming."""
         checkpoint_path = self._get_checkpoint_path()
         if checkpoint_path.exists():
@@ -94,7 +95,7 @@ class TruthValidationJob(BaseJob):
         checkpoint_path = self._get_checkpoint_path()
         checkpoint.last_updated = datetime.now(timezone.utc).isoformat()
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(checkpoint_path, 'w') as f:
+        with open(checkpoint_path, "w") as f:
             json.dump(checkpoint.to_dict(), f, indent=2)
 
     def _clear_checkpoint(self) -> None:
@@ -115,9 +116,7 @@ class TruthValidationJob(BaseJob):
         existing = self._load_checkpoint()
         if existing:
             remaining = len(existing.claims_to_process) - len(existing.claims_processed)
-            warnings.append(
-                f"Resuming from checkpoint: {len(existing.claims_processed)} already processed"
-            )
+            warnings.append(f"Resuming from checkpoint: {len(existing.claims_processed)} already processed")
             claims_count = remaining
         else:
             claims = get_claims_for_review(n=self.CLAIMS_PER_RUN, band=self.CONFIDENCE_BAND)
@@ -168,8 +167,7 @@ class TruthValidationJob(BaseJob):
         self.checkpoint = self._load_checkpoint()
         if self.checkpoint:
             claims_to_process = [
-                cid for cid in self.checkpoint.claims_to_process
-                if cid not in self.checkpoint.claims_processed
+                cid for cid in self.checkpoint.claims_to_process if cid not in self.checkpoint.claims_processed
             ]
         else:
             claims = get_claims_for_review(n=self.CLAIMS_PER_RUN, band=self.CONFIDENCE_BAND)
@@ -183,9 +181,9 @@ class TruthValidationJob(BaseJob):
             )
             self._save_checkpoint(self.checkpoint)
 
-        promoted: List[Dict[str, Any]] = []
-        disputed: List[Dict[str, Any]] = []
-        unchanged: List[str] = []
+        promoted: list[dict[str, Any]] = []
+        disputed: list[dict[str, Any]] = []
+        unchanged: list[str] = []
 
         for claim_id in claims_to_process:
             # Budget check
@@ -203,16 +201,20 @@ class TruthValidationJob(BaseJob):
                 outcome = await self._process_claim(claim)
 
                 if outcome["type"] == "promoted":
-                    promoted.append({
-                        "claim_id": claim_id,
-                        "old": outcome["old_confidence"],
-                        "new": outcome["new_confidence"],
-                    })
+                    promoted.append(
+                        {
+                            "claim_id": claim_id,
+                            "old": outcome["old_confidence"],
+                            "new": outcome["new_confidence"],
+                        }
+                    )
                 elif outcome["type"] == "disputed":
-                    disputed.append({
-                        "claim_id": claim_id,
-                        "reason": outcome["reason"],
-                    })
+                    disputed.append(
+                        {
+                            "claim_id": claim_id,
+                            "reason": outcome["reason"],
+                        }
+                    )
                 else:
                     unchanged.append(claim_id)
 
@@ -256,7 +258,7 @@ class TruthValidationJob(BaseJob):
 
         return result
 
-    async def _process_claim(self, claim: Claim) -> Dict[str, Any]:
+    async def _process_claim(self, claim: Claim) -> dict[str, Any]:
         """Process a single claim: search evidence, update confidence.
 
         Args:
@@ -290,8 +292,7 @@ class TruthValidationJob(BaseJob):
         # 1. Contradicting evidence is strong (weight >= 0.7) AND independent, OR
         # 2. Confidence dropped below 0.6
         strong_independent_contradiction = any(
-            c.weight >= 0.7 and c.independence_key not in supporting_keys
-            for c in contradictions
+            c.weight >= 0.7 and c.independence_key not in supporting_keys for c in contradictions
         )
         confidence_collapsed = new_confidence < 0.6 and old_confidence >= 0.6
 
@@ -302,11 +303,7 @@ class TruthValidationJob(BaseJob):
                 "new_confidence": new_confidence,
             }
         elif strong_independent_contradiction or confidence_collapsed:
-            reason = (
-                "strong_independent_contradiction"
-                if strong_independent_contradiction
-                else "confidence_collapsed"
-            )
+            reason = "strong_independent_contradiction" if strong_independent_contradiction else "confidence_collapsed"
             update_claim(
                 claim.claim_id,
                 status="disputed",
@@ -340,9 +337,9 @@ class TruthValidationJob(BaseJob):
 
     def _generate_markdown_report(
         self,
-        promoted: List[Dict],
-        disputed: List[Dict],
-        unchanged: List[str],
+        promoted: list[dict],
+        disputed: list[dict],
+        unchanged: list[str],
     ) -> str:
         """Generate markdown report.
 
@@ -389,22 +386,24 @@ class TruthValidationJob(BaseJob):
 
         # Budget summary
         budget = self.budget_tracker.summary()
-        lines.extend([
-            "## Budget Summary",
-            "",
-            f"- Tasks completed: {budget['tasks_completed']}/{budget['tasks_limit']}",
-            f"- Elapsed time: {budget['elapsed_seconds']}s / {budget['timeout_seconds']}s",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Budget Summary",
+                "",
+                f"- Tasks completed: {budget['tasks_completed']}/{budget['tasks_limit']}",
+                f"- Elapsed time: {budget['elapsed_seconds']}s / {budget['timeout_seconds']}s",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 
     def _generate_json_report(
         self,
-        promoted: List[Dict],
-        disputed: List[Dict],
-        unchanged: List[str],
-    ) -> Dict[str, Any]:
+        promoted: list[dict],
+        disputed: list[dict],
+        unchanged: list[str],
+    ) -> dict[str, Any]:
         """Generate JSON report.
 
         Args:

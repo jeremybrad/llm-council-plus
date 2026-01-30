@@ -4,9 +4,9 @@ This module provides v1 heuristic confidence scoring for claims based on evidenc
 Every score change includes a breakdown showing exactly how the score was calculated.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import List, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .claims import Evidence
@@ -21,12 +21,13 @@ class ScoreBreakdown:
     - Which evidence was used in the calculation
     - What cap was applied and why
     """
+
     base_score: float
     supporting_bonus: float
     independence_bonus: float
     contradiction_penalty: float
     final_score: float
-    evidence_ids_used: List[str]
+    evidence_ids_used: list[str]
     calculation_timestamp: str
     cap_applied: float
     cap_reason: str
@@ -43,12 +44,12 @@ class ScoreBreakdown:
 
 # Confidence caps
 CAP_STRONG = 0.99  # Only with 2+ strong independent sources
-CAP_WEAK = 0.98    # Default cap when insufficient independence
+CAP_WEAK = 0.98  # Default cap when insufficient independence
 
 
 def calculate_confidence_with_breakdown(
-    evidence_list: List["Evidence"],
-) -> Tuple[float, ScoreBreakdown]:
+    evidence_list: list["Evidence"],
+) -> tuple[float, ScoreBreakdown]:
     """
     Calculate confidence score with full explainability breakdown.
 
@@ -174,9 +175,22 @@ def classify_support(claim_text: str, evidence_quote: str) -> str:
 
     # Negation patterns
     negations = [
-        "not", "never", "no longer", "doesn't", "isn't", "wasn't",
-        "don't", "didn't", "won't", "wouldn't", "can't", "couldn't",
-        "shouldn't", "haven't", "hasn't", "hadn't"
+        "not",
+        "never",
+        "no longer",
+        "doesn't",
+        "isn't",
+        "wasn't",
+        "don't",
+        "didn't",
+        "won't",
+        "wouldn't",
+        "can't",
+        "couldn't",
+        "shouldn't",
+        "haven't",
+        "hasn't",
+        "hadn't",
     ]
 
     claim_negated = any(neg in claim_lower for neg in negations)
@@ -189,20 +203,111 @@ def classify_support(claim_text: str, evidence_quote: str) -> str:
     # Calculate keyword overlap
     # Remove common stop words for better signal
     stop_words = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will",
-        "would", "could", "should", "may", "might", "must", "shall",
-        "can", "need", "dare", "ought", "used", "to", "of", "in",
-        "for", "on", "with", "at", "by", "from", "as", "into",
-        "through", "during", "before", "after", "above", "below",
-        "between", "under", "again", "further", "then", "once",
-        "here", "there", "when", "where", "why", "how", "all",
-        "each", "few", "more", "most", "other", "some", "such",
-        "only", "own", "same", "so", "than", "too", "very", "just",
-        "and", "but", "if", "or", "because", "until", "while",
-        "about", "against", "this", "that", "these", "those", "i",
-        "me", "my", "myself", "we", "our", "ours", "you", "your",
-        "he", "him", "his", "she", "her", "it", "its", "they", "them"
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "until",
+        "while",
+        "about",
+        "against",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "me",
+        "my",
+        "myself",
+        "we",
+        "our",
+        "ours",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "it",
+        "its",
+        "they",
+        "them",
     }
 
     claim_words = set(claim_lower.split()) - stop_words

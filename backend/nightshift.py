@@ -24,20 +24,17 @@ Exit codes:
 
 import argparse
 import asyncio
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from .preflight import (
-    PreflightInfo,
-    BudgetConfig,
-    verify_repo_root,
-    print_repo_mismatch,
-)
-from .jobs.base import BaseJob, JobResult, JobStatus
 from .job_registry import get_available_jobs, get_job_class
+from .jobs.base import BaseJob, JobStatus
+from .preflight import (
+    BudgetConfig,
+    print_repo_mismatch,
+    verify_repo_root,
+)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -61,58 +58,31 @@ Exit codes:
     0 - Success
     1 - Error during execution
     2 - Preflight only or safety gate failed
-        """
+        """,
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Run command
     run_parser = subparsers.add_parser("run", help="Run a job")
+    run_parser.add_argument("--job", required=True, help="Job type to run (use 'list' command to see available jobs)")
     run_parser.add_argument(
-        "--job",
-        required=True,
-        help="Job type to run (use 'list' command to see available jobs)"
+        "--expected-repo-root", required=True, help="Expected absolute path to repository root (safety check)"
     )
     run_parser.add_argument(
-        "--expected-repo-root",
-        required=True,
-        help="Expected absolute path to repository root (safety check)"
+        "--go", action="store_true", help="Actually execute the job (without this, only preflight is shown)"
     )
     run_parser.add_argument(
-        "--go",
-        action="store_true",
-        help="Actually execute the job (without this, only preflight is shown)"
+        "--mode", choices=["cpu", "gpu", "skip"], default="cpu", help="Execution mode (default: cpu)"
+    )
+    run_parser.add_argument("--max-tasks", type=int, default=100, help="Maximum tasks to process (default: 100)")
+    run_parser.add_argument(
+        "--max-tokens", type=int, default=1_000_000, help="Maximum tokens to use (default: 1,000,000)"
     )
     run_parser.add_argument(
-        "--mode",
-        choices=["cpu", "gpu", "skip"],
-        default="cpu",
-        help="Execution mode (default: cpu)"
+        "--max-spend", type=float, default=None, help="Maximum USD to spend on cloud APIs (optional)"
     )
-    run_parser.add_argument(
-        "--max-tasks",
-        type=int,
-        default=100,
-        help="Maximum tasks to process (default: 100)"
-    )
-    run_parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=1_000_000,
-        help="Maximum tokens to use (default: 1,000,000)"
-    )
-    run_parser.add_argument(
-        "--max-spend",
-        type=float,
-        default=None,
-        help="Maximum USD to spend on cloud APIs (optional)"
-    )
-    run_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=3600,
-        help="Timeout in seconds (default: 3600 = 1 hour)"
-    )
+    run_parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds (default: 3600 = 1 hour)")
 
     # List command
     subparsers.add_parser("list", help="List available jobs")
@@ -159,7 +129,7 @@ async def run_job(job: BaseJob) -> int:
             print(f"Duration: {duration:.1f}s")
 
         if result.output_paths:
-            print(f"\nOutput files:")
+            print("\nOutput files:")
             for path in result.output_paths:
                 print(f"  - {path}")
 
@@ -167,7 +137,7 @@ async def run_job(job: BaseJob) -> int:
             print(f"\nSummary: {result.summary}")
 
         if result.errors:
-            print(f"\nErrors:")
+            print("\nErrors:")
             for error in result.errors:
                 print(f"  - {error}")
 
@@ -197,8 +167,10 @@ def main() -> int:
         Exit code
     """
     # Import jobs to register them
-    from .jobs import repo_docs_refresh  # noqa: F401
-    from .jobs import truth_validation  # noqa: F401
+    from .jobs import (
+        repo_docs_refresh,  # noqa: F401
+        truth_validation,  # noqa: F401
+    )
 
     parser = create_parser()
     args = parser.parse_args()

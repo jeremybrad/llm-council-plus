@@ -10,13 +10,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..preflight import PreflightInfo, BudgetConfig, BudgetTracker
+from ..preflight import BudgetConfig, BudgetTracker, PreflightInfo
 
 
 class JobStatus(Enum):
     """Status of a job execution."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -32,26 +33,23 @@ class JobResult:
     job_name: str
     status: JobStatus
     started_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
     tasks_completed: int = 0
     tasks_failed: int = 0
-    output_paths: List[str] = field(default_factory=list)
+    output_paths: list[str] = field(default_factory=list)
     summary: str = ""
-    details: Dict[str, Any] = field(default_factory=dict)
-    errors: List[str] = field(default_factory=list)
-    budget_summary: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    budget_summary: dict[str, Any] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "job_name": self.job_name,
             "status": self.status.value,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "duration_seconds": (
-                (self.completed_at - self.started_at).total_seconds()
-                if self.completed_at else None
-            ),
+            "duration_seconds": ((self.completed_at - self.started_at).total_seconds() if self.completed_at else None),
             "tasks_completed": self.tasks_completed,
             "tasks_failed": self.tasks_failed,
             "output_paths": self.output_paths,
@@ -98,7 +96,7 @@ class BaseJob(ABC):
         job_name: str,
         data_dir: Path,
         reports_dir: Path,
-        budget_config: Optional[BudgetConfig] = None,
+        budget_config: BudgetConfig | None = None,
         mode: str = "cpu",
     ):
         """Initialize the job.
@@ -150,7 +148,7 @@ class BaseJob(ABC):
         """
         pass
 
-    def check_budget(self) -> tuple[bool, Optional[str]]:
+    def check_budget(self) -> tuple[bool, str | None]:
         """Check if job is still within budget.
 
         Returns:

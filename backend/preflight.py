@@ -20,7 +20,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 
 @dataclass
@@ -28,12 +28,12 @@ class PreflightInfo:
     """Pre-execution information for a Night Shift job."""
 
     job_name: str
-    input_counts: Dict[str, int] = field(default_factory=dict)
+    input_counts: dict[str, int] = field(default_factory=dict)
     estimated_runtime_seconds: int = 0
     target_device: str = "cpu"
-    output_paths: List[str] = field(default_factory=list)
-    budget_limits: Dict[str, Any] = field(default_factory=dict)
-    warnings: List[str] = field(default_factory=list)
+    output_paths: list[str] = field(default_factory=list)
+    budget_limits: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
     def estimated_runtime_display(self) -> str:
         """Format estimated runtime for display."""
@@ -83,7 +83,7 @@ class PreflightInfo:
         print("To execute this job, add the --go flag")
         print("-" * 60 + "\n")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "job_name": self.job_name,
@@ -110,12 +110,7 @@ def verify_repo_root(expected_root: str) -> tuple[bool, str, str, str]:
     current_pwd = str(Path.cwd())
 
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             return (False, current_pwd, expected_root, "<not a git repo>")
 
@@ -153,11 +148,11 @@ class BudgetConfig:
 
     max_tasks_per_run: int = 100
     max_tokens_total: int = 1_000_000
-    max_spend_usd: Optional[float] = None
+    max_spend_usd: float | None = None
     timeout_seconds: int = 3600  # 1 hour default
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BudgetConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "BudgetConfig":
         """Create from dictionary."""
         return cls(
             max_tasks_per_run=data.get("max_tasks_per_run", 100),
@@ -166,7 +161,7 @@ class BudgetConfig:
             timeout_seconds=data.get("timeout_seconds", 3600),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "max_tasks_per_run": self.max_tasks_per_run,
@@ -184,7 +179,7 @@ class BudgetTracker:
     tasks_completed: int = 0
     tokens_used: int = 0
     spend_usd: float = 0.0
-    start_time: Optional[datetime] = None
+    start_time: datetime | None = None
 
     def start(self) -> None:
         """Mark job start time."""
@@ -196,7 +191,7 @@ class BudgetTracker:
         self.tokens_used += tokens
         self.spend_usd += cost_usd
 
-    def is_within_budget(self) -> tuple[bool, Optional[str]]:
+    def is_within_budget(self) -> tuple[bool, str | None]:
         """Check if still within budget limits.
 
         Returns:
@@ -218,7 +213,7 @@ class BudgetTracker:
 
         return (True, None)
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Get budget consumption summary."""
         elapsed = 0
         if self.start_time:

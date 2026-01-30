@@ -4,8 +4,9 @@ import json
 import os
 import tempfile
 from datetime import datetime
-from typing import List, Dict, Any, Optional
 from pathlib import Path
+from typing import Any
+
 from .config import DATA_DIR
 
 # Runs directory for roundtable mode - sibling to conversations
@@ -34,7 +35,7 @@ def get_conversation_path(conversation_id: str) -> str:
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
-def create_conversation(conversation_id: str) -> Dict[str, Any]:
+def create_conversation(conversation_id: str) -> dict[str, Any]:
     """
     Create a new conversation.
 
@@ -50,18 +51,18 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
         "title": "New Conversation",
-        "messages": []
+        "messages": [],
     }
 
     # Save to file
     path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         json.dump(conversation, f, indent=2)
 
     return conversation
 
 
-def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+def get_conversation(conversation_id: str) -> dict[str, Any] | None:
     """
     Load a conversation from storage.
 
@@ -76,11 +77,11 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     if not os.path.exists(path):
         return None
 
-    with open(path, 'r') as f:
+    with open(path) as f:
         return json.load(f)
 
 
-def save_conversation(conversation: Dict[str, Any]):
+def save_conversation(conversation: dict[str, Any]):
     """
     Save a conversation to storage.
 
@@ -89,12 +90,12 @@ def save_conversation(conversation: Dict[str, Any]):
     """
     ensure_data_dir()
 
-    path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
+    path = get_conversation_path(conversation["id"])
+    with open(path, "w") as f:
         json.dump(conversation, f, indent=2)
 
 
-def list_conversations() -> List[Dict[str, Any]]:
+def list_conversations() -> list[dict[str, Any]]:
     """
     List all conversations (metadata only).
 
@@ -105,17 +106,19 @@ def list_conversations() -> List[Dict[str, Any]]:
 
     conversations = []
     for filename in os.listdir(DATA_DIR):
-        if filename.endswith('.json'):
+        if filename.endswith(".json"):
             path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
+            with open(path) as f:
                 data = json.load(f)
                 # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
+                conversations.append(
+                    {
+                        "id": data["id"],
+                        "created_at": data["created_at"],
+                        "title": data.get("title", "New Conversation"),
+                        "message_count": len(data["messages"]),
+                    }
+                )
 
     # Sort by creation time, newest first
     conversations.sort(key=lambda x: x["created_at"], reverse=True)
@@ -135,26 +138,23 @@ def add_user_message(conversation_id: str, content: str):
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+    conversation["messages"].append({"role": "user", "content": content})
 
     save_conversation(conversation)
 
 
 def add_assistant_message(
     conversation_id: str,
-    stage1: List[Dict[str, Any]],
-    stage2: Optional[List[Dict[str, Any]]] = None,
-    stage3: Optional[Dict[str,Any]] = None,
-    metadata: Optional[Dict[str, Any]] = None
+    stage1: list[dict[str, Any]],
+    stage2: list[dict[str, Any]] | None = None,
+    stage3: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ):
     """
     Add an assistant message to a conversation.
-    
+
     Supports partial execution modes where stage2 and/or stage3 may be None.
-    
+
     Args:
         conversation_id: Conversation identifier
         stage1: List of individual model responses (always present)
@@ -170,7 +170,7 @@ def add_assistant_message(
         "role": "assistant",
         "stage1": stage1,
     }
-    
+
     # Only include stage2 and stage3 if they were executed
     if stage2 is not None:
         message["stage2"] = stage2
@@ -197,14 +197,7 @@ def add_error_message(conversation_id: str, error_text: str):
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    message = {
-        "role": "assistant",
-        "content": None,
-        "error": error_text,
-        "stage1": [],
-        "stage2": [],
-        "stage3": None
-    }
+    message = {"role": "assistant", "content": None, "error": error_text, "stage1": [], "stage2": [], "stage3": None}
 
     conversation["messages"].append(message)
     save_conversation(conversation)
@@ -249,6 +242,7 @@ def delete_conversation(conversation_id: str) -> bool:
 # Roundtable Run Storage
 # =============================================================================
 
+
 def get_run_path(conversation_id: str, run_id: str) -> Path:
     """Get the file path for a run.
 
@@ -262,7 +256,7 @@ def get_run_path(conversation_id: str, run_id: str) -> Path:
     return RUNS_DIR / conversation_id / f"{run_id}.json"
 
 
-def save_run(run_data: Dict[str, Any]) -> None:
+def save_run(run_data: dict[str, Any]) -> None:
     """Save a roundtable run to storage.
 
     Uses atomic write (write to temp, fsync, rename) to prevent corruption.
@@ -281,7 +275,7 @@ def save_run(run_data: Dict[str, Any]) -> None:
     # Atomic write: write to temp file, fsync, then rename
     fd, tmp_path = tempfile.mkstemp(dir=run_dir, suffix=".tmp")
     try:
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, "w") as f:
             json.dump(run_data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -295,7 +289,7 @@ def save_run(run_data: Dict[str, Any]) -> None:
         raise
 
 
-def get_run(conversation_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+def get_run(conversation_id: str, run_id: str) -> dict[str, Any] | None:
     """Load a run from storage.
 
     Args:
@@ -310,11 +304,11 @@ def get_run(conversation_id: str, run_id: str) -> Optional[Dict[str, Any]]:
     if not run_path.exists():
         return None
 
-    with open(run_path, 'r') as f:
+    with open(run_path) as f:
         return json.load(f)
 
 
-def list_runs(conversation_id: str) -> List[Dict[str, Any]]:
+def list_runs(conversation_id: str) -> list[dict[str, Any]]:
     """List all runs for a conversation.
 
     Args:
@@ -332,14 +326,16 @@ def list_runs(conversation_id: str) -> List[Dict[str, Any]]:
     for filename in runs_path.iterdir():
         if filename.suffix == ".json":
             try:
-                with open(filename, 'r') as f:
+                with open(filename) as f:
                     data = json.load(f)
-                    runs.append({
-                        "run_id": data.get("run_id"),
-                        "status": data.get("status", "unknown"),
-                        "created_at": data.get("created_at"),
-                        "completed_at": data.get("completed_at"),
-                    })
+                    runs.append(
+                        {
+                            "run_id": data.get("run_id"),
+                            "status": data.get("status", "unknown"),
+                            "created_at": data.get("created_at"),
+                            "completed_at": data.get("completed_at"),
+                        }
+                    )
             except Exception:
                 continue
 
@@ -349,10 +345,7 @@ def list_runs(conversation_id: str) -> List[Dict[str, Any]]:
 
 
 def add_roundtable_message(
-    conversation_id: str,
-    run_id: str,
-    chair_final: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None
+    conversation_id: str, run_id: str, chair_final: dict[str, Any], metadata: dict[str, Any] | None = None
 ):
     """Add a roundtable assistant message to a conversation.
 

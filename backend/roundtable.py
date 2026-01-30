@@ -3,14 +3,15 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncGenerator
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional, AsyncGenerator
-from dataclasses import dataclass, field, asdict
+from typing import Any
 
-from .council import query_model, get_provider_for_model
-from .settings import get_settings
 from .config import DEBUG_PROMPTS_DIR
+from .council import query_model
+from .settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ ROLES = {
 @dataclass
 class AgentConfig:
     """Configuration for a single agent in the council."""
+
     model: str
     role: str  # Key from ROLES dict
     label: str  # Display label like "Builder" or "Agent 1"
@@ -42,41 +44,44 @@ class AgentConfig:
 @dataclass
 class RoundResponse:
     """Response from a single agent in a round."""
+
     agent_label: str
     model: str
     role: str
     content: str
-    error: Optional[str] = None
-    duration_ms: Optional[int] = None
+    error: str | None = None
+    duration_ms: int | None = None
 
 
 @dataclass
 class RoundResult:
     """Complete result from a single round."""
+
     round_number: int
     round_name: str  # "opening", "critique", "revision"
-    responses: List[RoundResponse] = field(default_factory=list)
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    responses: list[RoundResponse] = field(default_factory=list)
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 @dataclass
 class RoundtableRun:
     """Complete roundtable run data."""
+
     run_id: str
     conversation_id: str
     question: str
     context: str = ""
     constraints: str = ""
     status: str = "running"  # running, completed, aborted
-    council: List[AgentConfig] = field(default_factory=list)
-    rounds: List[RoundResult] = field(default_factory=list)
-    moderator_summary: Optional[Dict[str, Any]] = None
-    chair_final: Optional[Dict[str, Any]] = None
+    council: list[AgentConfig] = field(default_factory=list)
+    rounds: list[RoundResult] = field(default_factory=list)
+    moderator_summary: dict[str, Any] | None = None
+    chair_final: dict[str, Any] | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "run_id": self.run_id,
@@ -131,57 +136,36 @@ def build_agent_system_prompt(role_key: str) -> str:
     return f"{global_prompt}\n\n---\n\n{role_prompt}"
 
 
-def format_round1_prompt(
-    agent_label: str,
-    question: str,
-    context: str = "",
-    constraints: str = ""
-) -> str:
+def format_round1_prompt(agent_label: str, question: str, context: str = "", constraints: str = "") -> str:
     """Format the Round 1 (opening) prompt for an agent."""
     template = load_template("rounds/r1_opening")
     return template.format(
         AGENT_LABEL=agent_label,
         QUESTION=question,
         CONTEXT=context or "(No additional context provided)",
-        CONSTRAINTS=constraints or "(No specific constraints)"
+        CONSTRAINTS=constraints or "(No specific constraints)",
     )
 
 
-def format_round2_prompt(
-    agent_label: str,
-    other_messages: str,
-    target_agent: str = "another agent"
-) -> str:
+def format_round2_prompt(agent_label: str, other_messages: str, target_agent: str = "another agent") -> str:
     """Format the Round 2 (critique) prompt for an agent."""
     template = load_template("rounds/r2_critique")
-    return template.format(
-        AGENT_LABEL=agent_label,
-        OTHER_MESSAGES=other_messages,
-        TARGET_AGENT=target_agent
-    )
+    return template.format(AGENT_LABEL=agent_label, OTHER_MESSAGES=other_messages, TARGET_AGENT=target_agent)
 
 
-def format_round3_prompt(
-    agent_label: str,
-    your_round1: str,
-    other_messages: str
-) -> str:
+def format_round3_prompt(agent_label: str, your_round1: str, other_messages: str) -> str:
     """Format the Round 3 (revision) prompt for an agent."""
     template = load_template("rounds/r3_revision")
-    return template.format(
-        AGENT_LABEL=agent_label,
-        YOUR_ROUND1=your_round1,
-        OTHER_MESSAGES=other_messages
-    )
+    return template.format(AGENT_LABEL=agent_label, YOUR_ROUND1=your_round1, OTHER_MESSAGES=other_messages)
 
 
 def format_moderator_prompt(
     question: str,
     constraints: str,
-    council_members: List[str],
+    council_members: list[str],
     round1_outputs: str,
     round2_outputs: str,
-    round3_outputs: str
+    round3_outputs: str,
 ) -> str:
     """Format the moderator synthesis prompt."""
     template = load_template("moderator")
@@ -191,7 +175,7 @@ def format_moderator_prompt(
         COUNCIL_MEMBERS=", ".join(council_members),
         ROUND1_OUTPUTS=round1_outputs,
         ROUND2_OUTPUTS=round2_outputs,
-        ROUND3_OUTPUTS=round3_outputs
+        ROUND3_OUTPUTS=round3_outputs,
     )
 
 
@@ -202,7 +186,7 @@ def format_chair_prompt(
     moderator_summary: str,
     round1_outputs: str,
     round2_outputs: str,
-    round3_outputs: str
+    round3_outputs: str,
 ) -> str:
     """Format the chair synthesis prompt."""
     template = load_template("chair")
@@ -213,11 +197,11 @@ def format_chair_prompt(
         MODERATOR_SUMMARY=moderator_summary,
         ROUND1_OUTPUTS=round1_outputs,
         ROUND2_OUTPUTS=round2_outputs,
-        ROUND3_OUTPUTS=round3_outputs
+        ROUND3_OUTPUTS=round3_outputs,
     )
 
 
-def format_responses_for_context(responses: List[RoundResponse]) -> str:
+def format_responses_for_context(responses: list[RoundResponse]) -> str:
     """Format a list of responses as context for the next round."""
     formatted = []
     for resp in responses:
@@ -236,7 +220,7 @@ def dump_prompt_to_file(
     system_prompt: str,
     user_prompt: str,
     temperature: float,
-    timestamp: str
+    timestamp: str,
 ) -> None:
     """Dump rendered prompts to debug file for inspection.
 
@@ -292,7 +276,7 @@ async def query_agent(
     user_prompt: str,
     timeout: float = 120.0,
     temperature: float = 0.5,
-    debug_context: Optional[Dict[str, str]] = None
+    debug_context: dict[str, str] | None = None,
 ) -> RoundResponse:
     """Query a single agent with its system prompt + user prompt.
 
@@ -307,6 +291,7 @@ async def query_agent(
         RoundResponse with content or error
     """
     import time
+
     start_time = time.time()
     timestamp = datetime.utcnow().isoformat()
 
@@ -322,13 +307,10 @@ async def query_agent(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
     try:
         response = await query_model(agent.model, messages, timeout, temperature)
@@ -341,7 +323,7 @@ async def query_agent(
                 role=ROLES.get(agent.role, agent.role),
                 content="",
                 error=response.get("error_message", "Unknown error"),
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
             )
 
         content = response.get("content", "")
@@ -354,7 +336,7 @@ async def query_agent(
             role=ROLES.get(agent.role, agent.role),
             content=content,
             error=None,
-            duration_ms=duration_ms
+            duration_ms=duration_ms,
         )
 
     except Exception as e:
@@ -366,20 +348,20 @@ async def query_agent(
             role=ROLES.get(agent.role, agent.role),
             content="",
             error=str(e),
-            duration_ms=duration_ms
+            duration_ms=duration_ms,
         )
 
 
 async def run_round_parallel(
-    agents: List[AgentConfig],
-    prompts: Dict[str, str],  # agent_label -> prompt
+    agents: list[AgentConfig],
+    prompts: dict[str, str],  # agent_label -> prompt
     round_number: int,
     round_name: str,
     temperature: float = 0.5,
     max_parallel: int = 2,
     request: Any = None,
-    debug_context: Optional[Dict[str, str]] = None
-) -> AsyncGenerator[Dict[str, Any], None]:
+    debug_context: dict[str, str] | None = None,
+) -> AsyncGenerator[dict[str, Any], None]:
     """Run a round with bounded parallel execution.
 
     Yields:
@@ -388,17 +370,10 @@ async def run_round_parallel(
         - Complete: {"type": "round_complete", "round_number": N, "round_result": RoundResult}
     """
     round_result = RoundResult(
-        round_number=round_number,
-        round_name=round_name,
-        started_at=datetime.utcnow().isoformat()
+        round_number=round_number, round_name=round_name, started_at=datetime.utcnow().isoformat()
     )
 
-    yield {
-        "type": "round_start",
-        "round_number": round_number,
-        "round_name": round_name,
-        "total": len(agents)
-    }
+    yield {"type": "round_start", "round_number": round_number, "round_name": round_name, "total": len(agents)}
 
     # Use semaphore for bounded concurrency
     semaphore = asyncio.Semaphore(max_parallel)
@@ -406,10 +381,7 @@ async def run_round_parallel(
     # Build debug context for this round if debug enabled
     round_debug_ctx = None
     if debug_context:
-        round_debug_ctx = {
-            "run_id": debug_context.get("run_id", "unknown"),
-            "round_name": round_name
-        }
+        round_debug_ctx = {"run_id": debug_context.get("run_id", "unknown"), "round_name": round_name}
 
     async def query_with_semaphore(agent: AgentConfig) -> RoundResponse:
         async with semaphore:
@@ -432,11 +404,7 @@ async def run_round_parallel(
                     t.cancel()
                 raise asyncio.CancelledError("Client disconnected")
 
-            done, pending = await asyncio.wait(
-                pending,
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=1.0
-            )
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)
 
             for task in done:
                 try:
@@ -449,7 +417,7 @@ async def run_round_parallel(
                         "round_number": round_number,
                         "count": completed_count,
                         "total": len(agents),
-                        "response": asdict(response)
+                        "response": asdict(response),
                     }
                 except asyncio.CancelledError:
                     raise
@@ -472,15 +440,15 @@ async def run_round_parallel(
             "round_name": round_result.round_name,
             "responses": [asdict(r) for r in round_result.responses],
             "started_at": round_result.started_at,
-            "completed_at": round_result.completed_at
-        }
+            "completed_at": round_result.completed_at,
+        },
     }
 
 
 async def run_roundtable(
     conversation_id: str,
     question: str,
-    agents: List[AgentConfig],
+    agents: list[AgentConfig],
     moderator_model: str,
     chair_model: str,
     context: str = "",
@@ -488,8 +456,8 @@ async def run_roundtable(
     output_format: str = "Markdown with clear headings",
     num_rounds: int = 3,
     max_parallel: int = 2,
-    request: Any = None
-) -> AsyncGenerator[Dict[str, Any], None]:
+    request: Any = None,
+) -> AsyncGenerator[dict[str, Any], None]:
     """Run a complete roundtable deliberation.
 
     Yields SSE-compatible events for real-time progress updates.
@@ -519,7 +487,7 @@ async def run_roundtable(
         question=question,
         context=context,
         constraints=constraints,
-        council=[agent for agent in agents]
+        council=[agent for agent in agents],
     )
 
     settings = get_settings()
@@ -535,17 +503,14 @@ async def run_roundtable(
         "type": "roundtable_init",
         "run_id": run_id,
         "total_rounds": num_rounds,
-        "council_members": [{"label": a.label, "model": a.model, "role": a.role} for a in agents]
+        "council_members": [{"label": a.label, "model": a.model, "role": a.role} for a in agents],
     }
 
     try:
         # === ROUND 1: Opening Statements ===
         round1_prompts = {
             agent.label: format_round1_prompt(
-                agent_label=agent.label,
-                question=question,
-                context=context,
-                constraints=constraints
+                agent_label=agent.label, question=question, context=context, constraints=constraints
             )
             for agent in agents
         }
@@ -559,7 +524,7 @@ async def run_roundtable(
             temperature=settings.council_temperature,
             max_parallel=max_parallel,
             request=request,
-            debug_context=debug_context
+            debug_context=debug_context,
         ):
             if event["type"] == "round_complete":
                 round1_result = RoundResult(
@@ -567,7 +532,7 @@ async def run_roundtable(
                     round_name="opening",
                     responses=[RoundResponse(**r) for r in event["round_result"]["responses"]],
                     started_at=event["round_result"]["started_at"],
-                    completed_at=event["round_result"]["completed_at"]
+                    completed_at=event["round_result"]["completed_at"],
                 )
                 run.rounds.append(round1_result)
             yield event
@@ -588,9 +553,7 @@ async def run_roundtable(
                 target_idx = (i + 1) % len(agents)
                 target_agent = agent_labels[target_idx]
                 round2_prompts[agent.label] = format_round2_prompt(
-                    agent_label=agent.label,
-                    other_messages=round1_context,
-                    target_agent=target_agent
+                    agent_label=agent.label, other_messages=round1_context, target_agent=target_agent
                 )
 
             round2_result = None
@@ -602,7 +565,7 @@ async def run_roundtable(
                 temperature=settings.stage2_temperature,  # Lower for precise critique
                 max_parallel=max_parallel,
                 request=request,
-                debug_context=debug_context
+                debug_context=debug_context,
             ):
                 if event["type"] == "round_complete":
                     round2_result = RoundResult(
@@ -610,7 +573,7 @@ async def run_roundtable(
                         round_name="critique",
                         responses=[RoundResponse(**r) for r in event["round_result"]["responses"]],
                         started_at=event["round_result"]["started_at"],
-                        completed_at=event["round_result"]["completed_at"]
+                        completed_at=event["round_result"]["completed_at"],
                     )
                     run.rounds.append(round2_result)
                 yield event
@@ -625,12 +588,10 @@ async def run_roundtable(
                     # Find this agent's Round 1 response
                     my_round1 = next(
                         (r.content for r in round1_result.responses if r.agent_label == agent.label),
-                        "(Your Round 1 response was not found)"
+                        "(Your Round 1 response was not found)",
                     )
                     round3_prompts[agent.label] = format_round3_prompt(
-                        agent_label=agent.label,
-                        your_round1=my_round1,
-                        other_messages=round2_context
+                        agent_label=agent.label, your_round1=my_round1, other_messages=round2_context
                     )
 
                 round3_result = None
@@ -642,7 +603,7 @@ async def run_roundtable(
                     temperature=settings.council_temperature,
                     max_parallel=max_parallel,
                     request=request,
-                    debug_context=debug_context
+                    debug_context=debug_context,
                 ):
                     if event["type"] == "round_complete":
                         round3_result = RoundResult(
@@ -650,7 +611,7 @@ async def run_roundtable(
                             round_name="revision",
                             responses=[RoundResponse(**r) for r in event["round_result"]["responses"]],
                             started_at=event["round_result"]["started_at"],
-                            completed_at=event["round_result"]["completed_at"]
+                            completed_at=event["round_result"]["completed_at"],
                         )
                         run.rounds.append(round3_result)
                     yield event
@@ -660,8 +621,12 @@ async def run_roundtable(
 
         # Format all round outputs for moderator
         round1_outputs = format_responses_for_context(run.rounds[0].responses) if len(run.rounds) > 0 else ""
-        round2_outputs = format_responses_for_context(run.rounds[1].responses) if len(run.rounds) > 1 else "(Round 2 not executed)"
-        round3_outputs = format_responses_for_context(run.rounds[2].responses) if len(run.rounds) > 2 else "(Round 3 not executed)"
+        round2_outputs = (
+            format_responses_for_context(run.rounds[1].responses) if len(run.rounds) > 1 else "(Round 2 not executed)"
+        )
+        round3_outputs = (
+            format_responses_for_context(run.rounds[2].responses) if len(run.rounds) > 2 else "(Round 3 not executed)"
+        )
 
         moderator_prompt = format_moderator_prompt(
             question=question,
@@ -669,13 +634,13 @@ async def run_roundtable(
             council_members=[a.label for a in agents],
             round1_outputs=round1_outputs,
             round2_outputs=round2_outputs,
-            round3_outputs=round3_outputs
+            round3_outputs=round3_outputs,
         )
 
         moderator_system_prompt = load_template("moderator").split("---")[0].strip()
         moderator_messages = [
             {"role": "system", "content": moderator_system_prompt},
-            {"role": "user", "content": moderator_prompt}
+            {"role": "user", "content": moderator_prompt},
         ]
 
         # Dump moderator prompt if debug enabled
@@ -688,15 +653,12 @@ async def run_roundtable(
                 system_prompt=moderator_system_prompt,
                 user_prompt=moderator_prompt,
                 temperature=settings.chairman_temperature,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
             )
 
         try:
             moderator_response = await query_model(
-                moderator_model,
-                moderator_messages,
-                timeout=180.0,
-                temperature=settings.chairman_temperature
+                moderator_model, moderator_messages, timeout=180.0, temperature=settings.chairman_temperature
             )
 
             moderator_content = moderator_response.get("content", "")
@@ -706,22 +668,14 @@ async def run_roundtable(
             run.moderator_summary = {
                 "model": moderator_model,
                 "content": moderator_content,
-                "error": moderator_response.get("error", False)
+                "error": moderator_response.get("error", False),
             }
 
         except Exception as e:
             logger.error(f"Moderator synthesis failed: {e}")
-            run.moderator_summary = {
-                "model": moderator_model,
-                "content": "",
-                "error": True,
-                "error_message": str(e)
-            }
+            run.moderator_summary = {"model": moderator_model, "content": "", "error": True, "error_message": str(e)}
 
-        yield {
-            "type": "moderator_complete",
-            "moderator_summary": run.moderator_summary
-        }
+        yield {"type": "moderator_complete", "moderator_summary": run.moderator_summary}
 
         # === CHAIR FINAL SYNTHESIS ===
         yield {"type": "chair_start"}
@@ -733,14 +687,11 @@ async def run_roundtable(
             moderator_summary=run.moderator_summary.get("content", ""),
             round1_outputs=round1_outputs,
             round2_outputs=round2_outputs,
-            round3_outputs=round3_outputs
+            round3_outputs=round3_outputs,
         )
 
         chair_system_prompt = "You are the Chair. You deliver the final answer with no preamble."
-        chair_messages = [
-            {"role": "system", "content": chair_system_prompt},
-            {"role": "user", "content": chair_prompt}
-        ]
+        chair_messages = [{"role": "system", "content": chair_system_prompt}, {"role": "user", "content": chair_prompt}]
 
         # Dump chair prompt if debug enabled
         if debug_context:
@@ -752,15 +703,12 @@ async def run_roundtable(
                 system_prompt=chair_system_prompt,
                 user_prompt=chair_prompt,
                 temperature=settings.chairman_temperature,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
             )
 
         try:
             chair_response = await query_model(
-                chair_model,
-                chair_messages,
-                timeout=180.0,
-                temperature=settings.chairman_temperature
+                chair_model, chair_messages, timeout=180.0, temperature=settings.chairman_temperature
             )
 
             chair_content = chair_response.get("content", "")
@@ -770,38 +718,26 @@ async def run_roundtable(
             run.chair_final = {
                 "model": chair_model,
                 "content": chair_content,
-                "error": chair_response.get("error", False)
+                "error": chair_response.get("error", False),
             }
 
         except Exception as e:
             logger.error(f"Chair synthesis failed: {e}")
-            run.chair_final = {
-                "model": chair_model,
-                "content": "",
-                "error": True,
-                "error_message": str(e)
-            }
+            run.chair_final = {"model": chair_model, "content": "", "error": True, "error_message": str(e)}
 
         run.status = "completed"
         run.completed_at = datetime.utcnow().isoformat()
 
-        yield {
-            "type": "chair_complete",
-            "chair_final": run.chair_final,
-            "run": run.to_dict()
-        }
+        yield {"type": "chair_complete", "chair_final": run.chair_final, "run": run.to_dict()}
 
     except asyncio.CancelledError:
         run.status = "aborted"
         run.completed_at = datetime.utcnow().isoformat()
-        yield {
-            "type": "roundtable_aborted",
-            "run": run.to_dict()
-        }
+        yield {"type": "roundtable_aborted", "run": run.to_dict()}
         raise
 
 
-def get_default_council(models: List[str]) -> List[AgentConfig]:
+def get_default_council(models: list[str]) -> list[AgentConfig]:
     """Create a default council from a list of models.
 
     Assigns roles in order: builder, skeptic, contrarian, historian, pragmatist, stylist
@@ -818,10 +754,6 @@ def get_default_council(models: List[str]) -> List[AgentConfig]:
     for i, model in enumerate(models):
         role = default_roles[i % len(default_roles)]
         label = ROLES.get(role, role.title())
-        council.append(AgentConfig(
-            model=model,
-            role=role,
-            label=label
-        ))
+        council.append(AgentConfig(model=model, role=role, label=label))
 
     return council
