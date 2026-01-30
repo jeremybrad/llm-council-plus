@@ -41,14 +41,18 @@ from .settings import (
     update_settings,
 )
 
+__version__ = "0.2.0"
+
 app = FastAPI(
     title="LLM Council Plus API",
     description="Multi-LLM roundtable orchestration with role-based agents, claims validation, and evidence-backed truth verification.",
-    version="0.1.0",
+    version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=[
-        {"name": "claims", "description": "Claims API for evidence-backed truth verification"},
+        {"name": "health", "description": "Health check and version info"},
+        {"name": "claims", "description": "Claims API v1 for evidence-backed truth verification"},
+        {"name": "claims-legacy", "description": "Deprecated: Use /api/v1/claims instead"},
         {"name": "council", "description": "Council deliberation endpoints"},
         {"name": "conversations", "description": "Conversation management"},
         {"name": "settings", "description": "Application settings"},
@@ -80,7 +84,10 @@ app.add_middleware(
 )
 
 # Include API routers
-app.include_router(claims_router)
+# Primary versioned API (v1)
+app.include_router(claims_router, prefix="/api/v1/claims")
+# Legacy unversioned API (deprecated, for backward compatibility)
+app.include_router(claims_router, prefix="/api/claims", deprecated=True)
 
 
 class CreateConversationRequest(BaseModel):
@@ -115,10 +122,25 @@ class Conversation(BaseModel):
     messages: list[dict[str, Any]]
 
 
-@app.get("/")
+@app.get("/", tags=["health"])
 async def root():
-    """Health check endpoint."""
-    return {"status": "ok", "service": "LLM Council API"}
+    """Root endpoint with basic status."""
+    return {"status": "ok", "service": "LLM Council Plus"}
+
+
+@app.get("/health", tags=["health"])
+async def health_check():
+    """Health check endpoint with version and status info for monitoring."""
+    return {
+        "status": "healthy",
+        "service": "LLM Council Plus API",
+        "version": __version__,
+        "api_versions": {
+            "current": "v1",
+            "supported": ["v1"],
+            "deprecated": ["v0 (/api/claims)"],
+        },
+    }
 
 
 @app.get("/api/conversations", response_model=list[ConversationMetadata])

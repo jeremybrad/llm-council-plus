@@ -42,7 +42,9 @@ from ..claims import (
 from ..evidence import get_sadb_status, search_evidence
 from ..scorer import classify_support
 
-router = APIRouter(prefix="/api/claims", tags=["claims"])
+# Router without prefix - prefix is set when including in main.py
+# This allows mounting at multiple paths for versioning
+router = APIRouter(tags=["claims"])
 
 
 # =============================================================================
