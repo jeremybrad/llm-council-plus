@@ -101,7 +101,9 @@ class SendMessageRequest(BaseModel):
 
     content: str
     web_search: bool = False
-    execution_mode: str = "full"  # 'chat_only', 'chat_ranking', 'full'
+    execution_mode: str = "full"  # 'chat_only', 'chat_ranking', 'full', 'roundtable'
+    role_context: dict[str, dict] | None = None  # JIT Context injection for roundtable mode
+    # Format: {"builder": {"facts": [...], "claims": [...]}, "skeptic": {"facts": [...]}, ...}
 
 
 class ConversationMetadata(BaseModel):
@@ -287,6 +289,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         context=search_context,
                         max_parallel=max_parallel,
                         request=request,
+                        role_context=body.role_context,
                     ):
                         event_type = event.get("type")
 

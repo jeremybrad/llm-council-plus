@@ -39,6 +39,7 @@ class AgentConfig:
     model: str
     role: str  # Key from ROLES dict
     label: str  # Display label like "Builder" or "Agent 1"
+    context_capsule: dict | None = None  # JIT context injection (c010.capsule.v1)
 
 
 @dataclass
@@ -129,11 +130,29 @@ def load_role_prompt(role_key: str) -> str:
     return load_template(f"roles/{role_key}")
 
 
-def build_agent_system_prompt(role_key: str) -> str:
-    """Build complete system prompt for an agent (global + role)."""
+def build_agent_system_prompt(role_key: str, context_capsule: dict | None = None) -> str:
+    """Build complete system prompt for an agent (global + role + optional context).
+
+    Args:
+        role_key: Key from ROLES dict (e.g., "builder", "skeptic")
+        context_capsule: Optional JIT context from Brain on Tap (c010.capsule.v1 format)
+            Expected shape: {"facts": ["fact1", "fact2", ...], ...}
+
+    Returns:
+        Complete system prompt with global + role + optional context facts
+    """
     global_prompt = load_template("global_system")
     role_prompt = load_role_prompt(role_key)
-    return f"{global_prompt}\n\n---\n\n{role_prompt}"
+    base_prompt = f"{global_prompt}\n\n---\n\n{role_prompt}"
+
+    # Append context facts if provided
+    if context_capsule and context_capsule.get("facts"):
+        facts = context_capsule["facts"]
+        facts_section = "\n\n---\n\n**Contextual Facts (from Brain on Tap):**\n"
+        facts_section += "\n".join(f"- {fact}" for fact in facts)
+        return base_prompt + facts_section
+
+    return base_prompt
 
 
 def format_round1_prompt(agent_label: str, question: str, context: str = "", constraints: str = "") -> str:
@@ -295,7 +314,7 @@ async def query_agent(
     start_time = time.time()
     timestamp = datetime.utcnow().isoformat()
 
-    system_prompt = build_agent_system_prompt(agent.role)
+    system_prompt = build_agent_system_prompt(agent.role, agent.context_capsule)
 
     # Dump prompts if debug context provided
     if debug_context:
@@ -457,6 +476,7 @@ async def run_roundtable(
     num_rounds: int = 3,
     max_parallel: int = 2,
     request: Any = None,
+    role_context: dict[str, dict] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run a complete roundtable deliberation.
 
@@ -474,12 +494,21 @@ async def run_roundtable(
         num_rounds: Number of deliberation rounds (default 3)
         max_parallel: Max concurrent model queries
         request: FastAPI request for disconnect checking
+        role_context: Optional per-role context injection (JIT Context from Brain on Tap)
+            Format: {"builder": {"facts": [...], "claims": [...]}, "skeptic": {"facts": [...]}, ...}
+            Keys are role keys (builder, skeptic, historian, pragmatist, stylist, contrarian)
 
     Yields:
         Events: roundtable_init, round_start, round_progress, round_complete,
                 moderator_start, moderator_complete, chair_start, chair_complete
     """
     run_id = str(uuid.uuid4())
+
+    # Apply role_context to agents if provided
+    if role_context:
+        for agent in agents:
+            if agent.role in role_context:
+                agent.context_capsule = role_context[agent.role]
 
     run = RoundtableRun(
         run_id=run_id,
