@@ -28,7 +28,19 @@ from .openai_compat import (
 )
 from pathlib import Path
 
-app = FastAPI(title="LLM Council Plus API")
+app = FastAPI(
+    title="LLM Council Plus API",
+    description="Multi-LLM roundtable orchestration with role-based agents, claims validation, and evidence-backed truth verification.",
+    version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=[
+        {"name": "claims", "description": "Claims API for evidence-backed truth verification"},
+        {"name": "council", "description": "Council deliberation endpoints"},
+        {"name": "conversations", "description": "Conversation management"},
+        {"name": "settings", "description": "Application settings"},
+    ],
+)
 
 # Initialize mode runner with persist directory
 MODE_SESSIONS_DIR = Path(__file__).parent.parent / "data" / "mode_sessions"
