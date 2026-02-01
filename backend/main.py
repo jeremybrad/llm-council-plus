@@ -374,6 +374,14 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         },
                     )
 
+                    # Capture turns to SADB hot facts pipeline (PRD-06f1b)
+                    try:
+                        from .turn_capture import capture_run as capture_turns
+
+                        capture_turns(run_data)
+                    except Exception as e:
+                        print(f"Turn capture warning: {e}")
+
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
                 return  # Exit early - roundtable flow is complete
 
