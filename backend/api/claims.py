@@ -787,7 +787,7 @@ async def update_claim_by_id(claim_id: str, request: UpdateClaimRequest):
                 "reason": e.reason,
                 "transition_rules": TRANSITION_RULES,
             },
-        )
+        ) from e
 
     return ClaimResponse.from_dataclass(claim, include_evidence=True, include_history=True)
 
@@ -916,7 +916,7 @@ async def adjudicate_claim_endpoint(claim_id: str, request: AdjudicateRequest):
             update_status=request.update_status,
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     # Get updated claim for response
     updated_claim = get_claim(claim_id)

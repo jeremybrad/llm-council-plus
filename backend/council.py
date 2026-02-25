@@ -5,11 +5,6 @@ import logging
 from typing import Any
 
 from .config import get_chairman_model, get_council_models
-from .settings import get_settings
-
-logger = logging.getLogger(__name__)
-
-
 from .providers.anthropic import AnthropicProvider
 from .providers.custom_openai import CustomOpenAIProvider
 from .providers.deepseek import DeepSeekProvider
@@ -19,6 +14,9 @@ from .providers.mistral import MistralProvider
 from .providers.ollama import OllamaProvider
 from .providers.openai import OpenAIProvider
 from .providers.openrouter import OpenRouterProvider
+from .settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 # Initialize providers
 PROVIDERS = {
@@ -56,7 +54,6 @@ async def query_model(
 async def query_models_parallel(models: list[str], messages: list[dict[str, str]]) -> dict[str, Any]:
     """Dispatch parallel query to appropriate providers."""
     tasks = []
-    model_to_task_map = {}
 
     # Group models by provider to optimize batching if supported (mostly for OpenRouter/Ollama legacy)
     # But for simplicity and modularity, we'll just spawn individual tasks for now
@@ -207,14 +204,14 @@ async def stage2_collect_rankings(
     labels = [chr(65 + i) for i in range(len(successful_results))]  # A, B, C, ...
 
     # Create mapping from label to model name
-    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, successful_results)}
+    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, successful_results, strict=False)}
 
     # Yield the mapping first so the caller has it
     yield label_to_model
 
     # Build the ranking prompt
     responses_text = "\n\n".join(
-        [f"Response {label}:\n{result['response']}" for label, result in zip(labels, successful_results)]
+        [f"Response {label}:\n{result['response']}" for label, result in zip(labels, successful_results, strict=False)]
     )
 
     search_context_block = ""

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from .prompts import STAGE1_PROMPT_DEFAULT, STAGE2_PROMPT_DEFAULT, STAGE3_PROMPT_DEFAULT
 from .search import SearchProvider
 
 # Settings file path
@@ -116,10 +117,6 @@ AVAILABLE_MODELS = [
         "source": "openrouter",
     },
 ]
-
-
-from .prompts import STAGE1_PROMPT_DEFAULT, STAGE2_PROMPT_DEFAULT, STAGE3_PROMPT_DEFAULT
-
 
 class Settings(BaseModel):
     """Application settings."""

@@ -192,7 +192,7 @@ def extract_search_keywords(query: str, max_keywords: int = 6) -> str:
 
         # Filter and clean keywords
         clean_keywords = []
-        for kw, score in keywords:
+        for kw, _score in keywords:
             kw_lower = kw.lower()
 
             # Skip known noise phrases

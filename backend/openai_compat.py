@@ -241,7 +241,6 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
     conversation_id = f"openai-compat-{uuid.uuid4().hex[:12]}"
 
     # Stream progress updates
-    progress_buffer = []
     final_content = ""
 
     try:

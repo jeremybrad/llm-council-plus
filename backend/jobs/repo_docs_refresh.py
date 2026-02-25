@@ -138,7 +138,7 @@ class RepoDocsRefreshJob(BaseJob):
                     )
 
             # Check for broken internal links
-            for link_text, link_url in links:
+            for _link_text, link_url in links:
                 if link_url.startswith(("http://", "https://", "mailto:", "#")):
                     continue  # Skip external links and anchors
 

@@ -56,7 +56,7 @@ async def query_model(
                     try:
                         error_data = response.json()
                         error_detail = error_data.get("error", {}).get("message", "bad_request")
-                    except:
+                    except Exception:
                         pass
                     print(f"Bad request for {model}: {error_detail}")
                     return {
@@ -144,7 +144,7 @@ async def query_models_parallel(
             batch_responses = await asyncio.gather(*tasks)
 
             # Map batch results
-            for model, response in zip(batch, batch_responses):
+            for model, response in zip(batch, batch_responses, strict=False):
                 results[model] = response
 
             # Small delay between batches (except for last batch)
@@ -160,7 +160,7 @@ async def query_models_parallel(
     responses = await asyncio.gather(*tasks)
 
     # Map models to their responses
-    return {model: response for model, response in zip(models, responses)}
+    return dict(zip(models, responses, strict=False))
 
 
 async def fetch_models() -> list[dict[str, Any]]:

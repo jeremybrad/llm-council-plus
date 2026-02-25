@@ -10,14 +10,27 @@ Each mode is a folder with:
 
 import copy
 import uuid
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .json_recovery import extract_best_effort_question, parse_json, recover_socrates_turn
 from .registry import ModeDefinition, list_modes, load_mode
 from .sessions import ModeSession, SessionStore
+
+__all__ = [
+    "ModeDefinition",
+    "list_modes",
+    "load_mode",
+    "ModeSession",
+    "SessionStore",
+    "extract_best_effort_question",
+    "parse_json",
+    "recover_socrates_turn",
+    "ModeRunner",
+    "ModeRunResult",
+    "get_mode_runner",
+]
 
 
 @dataclass
@@ -52,7 +65,7 @@ class ModeRunner:
 
     def render_prompt(self, mode_id: str, template_name: str, variables: dict[str, Any]) -> str:
         """Render a prompt template with variables."""
-        mode = load_mode(mode_id, self.modes_dir)
+        load_mode(mode_id, self.modes_dir)
         template_path = self.modes_dir / mode_id / "prompts" / f"{template_name}.txt"
 
         if not template_path.exists():

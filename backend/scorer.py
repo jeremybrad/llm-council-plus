@@ -116,7 +116,7 @@ def calculate_confidence_with_breakdown(
     supporting_bonus = min(0.3, (len(supporting) - 1) * 0.1)
 
     # Independence bonus: +0.1 if multiple unique sources
-    independence_keys = set(e.independence_key for e in supporting)
+    independence_keys = {e.independence_key for e in supporting}
     independence_bonus = 0.1 if len(independence_keys) > 1 else 0.0
 
     # Contradiction penalty: -0.2 per contradicting piece

@@ -124,7 +124,7 @@ class GoogleProvider(LLMProvider):
                                 "success": False,
                                 "message": f"Error {response.status_code}: {str(error_data)[:200]}",
                             }
-                    except:
+                    except Exception:
                         return {"success": False, "message": f"Error {response.status_code}: {response.text[:200]}"}
         except Exception as e:
             return {"success": False, "message": str(e)}

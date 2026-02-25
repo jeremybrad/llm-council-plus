@@ -96,4 +96,4 @@ async def query_models_parallel(models: list[str], messages: list[dict[str, str]
     responses = await asyncio.gather(*tasks)
 
     # Map models to their responses
-    return {model: response for model, response in zip(models, responses)}
+    return dict(zip(models, responses, strict=False))

@@ -516,7 +516,7 @@ async def run_roundtable(
         question=question,
         context=context,
         constraints=constraints,
-        council=[agent for agent in agents],
+        council=list(agents),
     )
 
     settings = get_settings()

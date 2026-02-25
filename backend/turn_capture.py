@@ -65,7 +65,7 @@ def get_session_id() -> str:
 
     if bbot_context_path.exists():
         try:
-            with open(bbot_context_path, "r", encoding="utf-8") as f:
+            with open(bbot_context_path, encoding="utf-8") as f:
                 context = json.load(f)
                 # Only use session_id, NOT capsule_id
                 session_id = context.get("session_id")
@@ -108,7 +108,7 @@ def sanitize_for_turn(content: str) -> dict[str, Any]:
         if str(c003_path) not in sys.path:
             sys.path.insert(0, str(c003_path))
 
-        from leakscan_jsonl import scan_text, redact_text, SECRET_PATTERNS, PII_PATTERNS
+        from leakscan_jsonl import PII_PATTERNS, SECRET_PATTERNS, redact_text, scan_text
 
         # Scan for hits
         hits = scan_text(content)
@@ -328,7 +328,7 @@ def append_turns(session_id: str, turns: list[dict[str, Any]], sadb_root: Path) 
     # Read existing content if file exists
     existing_lines = []
     if output_path.exists():
-        with open(output_path, "r", encoding="utf-8") as f:
+        with open(output_path, encoding="utf-8") as f:
             existing_lines = f.readlines()
 
     # Write to temp file first (atomic write pattern)

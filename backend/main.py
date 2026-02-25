@@ -610,7 +610,6 @@ async def get_app_settings():
         "chairman_model": settings.chairman_model,
         # Remote/Local filters
         "council_member_filters": settings.council_member_filters,
-        "council_member_filters": settings.council_member_filters,
         "chairman_filter": settings.chairman_filter,
         "search_query_filter": settings.search_query_filter,
         # Temperature Settings
@@ -650,10 +649,10 @@ async def update_app_settings(request: UpdateSettingsRequest):
         try:
             provider = SearchProvider(request.search_provider)
             updates["search_provider"] = provider
-        except ValueError:
+        except ValueError as e:
             raise HTTPException(
                 status_code=400, detail=f"Invalid search provider. Must be one of: {[p.value for p in SearchProvider]}"
-            )
+            ) from e
 
     if request.search_keyword_extraction is not None:
         if request.search_keyword_extraction not in ["direct", "yake"]:
@@ -1194,8 +1193,8 @@ async def get_mode(mode_id: str):
     try:
         mode = await runner.get_mode(mode_id)
         return mode.to_dict()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Mode not found: {mode_id}")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Mode not found: {mode_id}") from e
 
 
 @app.post("/api/modes/sessions")
@@ -1206,8 +1205,8 @@ async def create_mode_session(request: CreateModeSessionRequest):
     # Verify mode exists
     try:
         mode = await runner.get_mode(request.mode_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Mode not found: {request.mode_id}")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Mode not found: {request.mode_id}") from e
 
     # Use mode's default max_turns if not specified
     max_turns = request.max_turns or mode.protocol.get("max_turns_default", 12)
@@ -1281,7 +1280,7 @@ async def run_mode_turn(mode_id: str, request: ModeTurnRequest):
             response = await query_model(model=model, messages=messages, timeout=120.0, temperature=0.7)
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Model query failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model query failed: {str(e)}") from e
 
         if response.get("error"):
             raise HTTPException(status_code=500, detail=f"Model error: {response.get('content', 'Unknown error')}")
@@ -1382,7 +1381,7 @@ async def stop_mode_session(mode_id: str, request: ModeSummaryRequest):
         try:
             response = await query_model(model=model, messages=messages, timeout=120.0, temperature=0.5)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}") from e
 
         raw_summary = response.get("content", "")
 
