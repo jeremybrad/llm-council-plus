@@ -204,7 +204,9 @@ async def stage2_collect_rankings(
     labels = [chr(65 + i) for i in range(len(successful_results))]  # A, B, C, ...
 
     # Create mapping from label to model name
-    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, successful_results, strict=False)}
+    label_to_model = {
+        f"Response {label}": result["model"] for label, result in zip(labels, successful_results, strict=False)
+    }
 
     # Yield the mapping first so the caller has it
     yield label_to_model

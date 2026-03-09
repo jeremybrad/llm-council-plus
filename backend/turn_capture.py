@@ -180,28 +180,30 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
 
     # 1. User turn (the original question)
     user_sanitized = sanitize_for_turn(question)
-    turns.append({
-        "turn_id": str(uuid.uuid4()),
-        "session_id": session_id,
-        "timestamp": run_data.get("created_at", datetime.now(timezone.utc).isoformat()),
-        "source_system": "roundtable",
-        "speaker_role": "user",
-        "speaker_id": "user",
-        "model": None,
-        "content": user_sanitized["content"],
-        "sanitized": user_sanitized["sanitized"],
-        "blocked": user_sanitized["blocked"],
-        "leakscan_hits": user_sanitized["leakscan_hits"],
-        "meta": {
-            "round_number": None,
-            "round_name": None,
-            "duration_ms": None,
-            "run_id": run_id,
-            "conversation_id": conversation_id,
-            "error": None,
-            "agent_role": None,
-        },
-    })
+    turns.append(
+        {
+            "turn_id": str(uuid.uuid4()),
+            "session_id": session_id,
+            "timestamp": run_data.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "source_system": "roundtable",
+            "speaker_role": "user",
+            "speaker_id": "user",
+            "model": None,
+            "content": user_sanitized["content"],
+            "sanitized": user_sanitized["sanitized"],
+            "blocked": user_sanitized["blocked"],
+            "leakscan_hits": user_sanitized["leakscan_hits"],
+            "meta": {
+                "round_number": None,
+                "round_name": None,
+                "duration_ms": None,
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "error": None,
+                "agent_role": None,
+            },
+        }
+    )
 
     # 2. Agent turns from each round
     for round_result in run_data.get("rounds", []):
@@ -218,28 +220,30 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
 
             content_sanitized = sanitize_for_turn(content)
 
-            turns.append({
-                "turn_id": str(uuid.uuid4()),
-                "session_id": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "source_system": "roundtable",
-                "speaker_role": "assistant",
-                "speaker_id": f"agent:{agent_label}",
-                "model": model,
-                "content": content_sanitized["content"],
-                "sanitized": content_sanitized["sanitized"],
-                "blocked": content_sanitized["blocked"],
-                "leakscan_hits": content_sanitized["leakscan_hits"],
-                "meta": {
-                    "round_number": round_number,
-                    "round_name": round_name,
-                    "duration_ms": duration_ms,
-                    "run_id": run_id,
-                    "conversation_id": conversation_id,
-                    "error": error,
-                    "agent_role": role,
-                },
-            })
+            turns.append(
+                {
+                    "turn_id": str(uuid.uuid4()),
+                    "session_id": session_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source_system": "roundtable",
+                    "speaker_role": "assistant",
+                    "speaker_id": f"agent:{agent_label}",
+                    "model": model,
+                    "content": content_sanitized["content"],
+                    "sanitized": content_sanitized["sanitized"],
+                    "blocked": content_sanitized["blocked"],
+                    "leakscan_hits": content_sanitized["leakscan_hits"],
+                    "meta": {
+                        "round_number": round_number,
+                        "round_name": round_name,
+                        "duration_ms": duration_ms,
+                        "run_id": run_id,
+                        "conversation_id": conversation_id,
+                        "error": error,
+                        "agent_role": role,
+                    },
+                }
+            )
 
     # 3. Moderator turn
     moderator_summary = run_data.get("moderator_summary")
@@ -250,28 +254,30 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
 
         mod_sanitized = sanitize_for_turn(mod_content)
 
-        turns.append({
-            "turn_id": str(uuid.uuid4()),
-            "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "source_system": "roundtable",
-            "speaker_role": "assistant",
-            "speaker_id": "moderator",
-            "model": mod_model,
-            "content": mod_sanitized["content"],
-            "sanitized": mod_sanitized["sanitized"],
-            "blocked": mod_sanitized["blocked"],
-            "leakscan_hits": mod_sanitized["leakscan_hits"],
-            "meta": {
-                "round_number": None,
-                "round_name": "moderator",
-                "duration_ms": None,
-                "run_id": run_id,
-                "conversation_id": conversation_id,
-                "error": mod_error if mod_error else None,
-                "agent_role": "Moderator",
-            },
-        })
+        turns.append(
+            {
+                "turn_id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source_system": "roundtable",
+                "speaker_role": "assistant",
+                "speaker_id": "moderator",
+                "model": mod_model,
+                "content": mod_sanitized["content"],
+                "sanitized": mod_sanitized["sanitized"],
+                "blocked": mod_sanitized["blocked"],
+                "leakscan_hits": mod_sanitized["leakscan_hits"],
+                "meta": {
+                    "round_number": None,
+                    "round_name": "moderator",
+                    "duration_ms": None,
+                    "run_id": run_id,
+                    "conversation_id": conversation_id,
+                    "error": mod_error if mod_error else None,
+                    "agent_role": "Moderator",
+                },
+            }
+        )
 
     # 4. Chair turn
     chair_final = run_data.get("chair_final")
@@ -282,28 +288,30 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
 
         chair_sanitized = sanitize_for_turn(chair_content)
 
-        turns.append({
-            "turn_id": str(uuid.uuid4()),
-            "session_id": session_id,
-            "timestamp": run_data.get("completed_at", datetime.now(timezone.utc).isoformat()),
-            "source_system": "roundtable",
-            "speaker_role": "assistant",
-            "speaker_id": "chair",
-            "model": chair_model,
-            "content": chair_sanitized["content"],
-            "sanitized": chair_sanitized["sanitized"],
-            "blocked": chair_sanitized["blocked"],
-            "leakscan_hits": chair_sanitized["leakscan_hits"],
-            "meta": {
-                "round_number": None,
-                "round_name": "chair",
-                "duration_ms": None,
-                "run_id": run_id,
-                "conversation_id": conversation_id,
-                "error": chair_error if chair_error else None,
-                "agent_role": "Chair",
-            },
-        })
+        turns.append(
+            {
+                "turn_id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "timestamp": run_data.get("completed_at", datetime.now(timezone.utc).isoformat()),
+                "source_system": "roundtable",
+                "speaker_role": "assistant",
+                "speaker_id": "chair",
+                "model": chair_model,
+                "content": chair_sanitized["content"],
+                "sanitized": chair_sanitized["sanitized"],
+                "blocked": chair_sanitized["blocked"],
+                "leakscan_hits": chair_sanitized["leakscan_hits"],
+                "meta": {
+                    "round_number": None,
+                    "round_name": "chair",
+                    "duration_ms": None,
+                    "run_id": run_id,
+                    "conversation_id": conversation_id,
+                    "error": chair_error if chair_error else None,
+                    "agent_role": "Chair",
+                },
+            }
+        )
 
     return turns
 

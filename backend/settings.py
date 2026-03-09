@@ -118,6 +118,7 @@ AVAILABLE_MODELS = [
     },
 ]
 
+
 class Settings(BaseModel):
     """Application settings."""
 
