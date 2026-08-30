@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.roundtable import (
     run_roundtable,
+    query_agent,
     get_default_council,
     AgentConfig,
     RoundtableRun,
@@ -129,6 +130,72 @@ class TestRoundtableExecution:
             # Verify content makes sense
             assert "Summary" in run_data["moderator_summary"]["content"] or "consensus" in run_data["moderator_summary"]["content"].lower()
             assert "Final" in run_data["chair_final"]["content"] or "synthesis" in run_data["chair_final"]["content"].lower()
+
+    @pytest.mark.asyncio
+    async def test_timeout_override_reaches_council_moderator_and_chair(self, mock_query_model, mock_settings):
+        """Use one caller-supplied timeout for every provider-neutral query."""
+        timeout_seconds = 37.25
+        agents = [
+            AgentConfig(model="mock:builder", role="builder", label="Builder"),
+            AgentConfig(model="mock:skeptic", role="skeptic", label="Skeptic"),
+        ]
+
+        with patch("backend.roundtable.query_model", mock_query_model), patch(
+            "backend.roundtable.get_settings", return_value=mock_settings
+        ):
+            async for _ in run_roundtable(
+                conversation_id="test-timeout-override",
+                question="Test timeout propagation",
+                agents=agents,
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=3,
+                timeout_seconds=timeout_seconds,
+            ):
+                pass
+
+        assert len(mock_query_model.call_log) == 8
+        assert {call["timeout"] for call in mock_query_model.call_log} == {timeout_seconds}
+        assert {call["model"] for call in mock_query_model.call_log} >= {
+            "mock:builder",
+            "mock:skeptic",
+            "mock:moderator",
+            "mock:chair",
+        }
+
+    @pytest.mark.asyncio
+    async def test_timeout_defaults_to_settings_for_every_roundtable_query(self, mock_query_model, mock_settings):
+        """Use the settings default when a caller does not supply an override."""
+        mock_settings.roundtable_timeout_seconds = 120.0
+        agents = [
+            AgentConfig(model="mock:builder", role="builder", label="Builder"),
+        ]
+
+        with patch("backend.roundtable.query_model", mock_query_model), patch(
+            "backend.roundtable.get_settings", return_value=mock_settings
+        ):
+            async for _ in run_roundtable(
+                conversation_id="test-timeout-default",
+                question="Test timeout fallback",
+                agents=agents,
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=1,
+            ):
+                pass
+
+        assert {call["timeout"] for call in mock_query_model.call_log} == {120.0}
+
+    @pytest.mark.asyncio
+    async def test_timeout_failure_is_reported_as_an_agent_error(self):
+        """Keep timeout failures in the provider-neutral RoundResponse contract."""
+        agent = AgentConfig(model="mock:builder", role="builder", label="Builder")
+
+        with patch("backend.roundtable.query_model", new=AsyncMock(side_effect=asyncio.TimeoutError("sentinel timeout"))):
+            response = await query_agent(agent, "Test timeout failure", timeout=37.25)
+
+        assert response.content == ""
+        assert response.error == "sentinel timeout"
 
 
 class TestTemplateSubstitution:

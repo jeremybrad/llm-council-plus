@@ -378,6 +378,7 @@ async def run_round_parallel(
     round_name: str,
     temperature: float = 0.5,
     max_parallel: int = 2,
+    timeout_seconds: float = 120.0,
     request: Any = None,
     debug_context: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
@@ -405,7 +406,13 @@ async def run_round_parallel(
     async def query_with_semaphore(agent: AgentConfig) -> RoundResponse:
         async with semaphore:
             prompt = prompts.get(agent.label, "")
-            return await query_agent(agent, prompt, temperature=temperature, debug_context=round_debug_ctx)
+            return await query_agent(
+                agent,
+                prompt,
+                timeout=timeout_seconds,
+                temperature=temperature,
+                debug_context=round_debug_ctx,
+            )
 
     # Create tasks
     tasks = [asyncio.create_task(query_with_semaphore(agent)) for agent in agents]
@@ -475,6 +482,7 @@ async def run_roundtable(
     output_format: str = "Markdown with clear headings",
     num_rounds: int = 3,
     max_parallel: int = 2,
+    timeout_seconds: float | None = None,
     request: Any = None,
     role_context: dict[str, dict] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
@@ -493,6 +501,7 @@ async def run_roundtable(
         output_format: Requested output format
         num_rounds: Number of deliberation rounds (default 3)
         max_parallel: Max concurrent model queries
+        timeout_seconds: Per-model request timeout; defaults to the settings value
         request: FastAPI request for disconnect checking
         role_context: Optional per-role context injection (JIT Context from Brain on Tap)
             Format: {"builder": {"facts": [...], "claims": [...]}, "skeptic": {"facts": [...]}, ...}
@@ -520,6 +529,7 @@ async def run_roundtable(
     )
 
     settings = get_settings()
+    effective_timeout = timeout_seconds if timeout_seconds is not None else settings.roundtable_timeout_seconds
 
     # Debug context for prompt dumping (if enabled)
     debug_context = None
@@ -552,6 +562,7 @@ async def run_roundtable(
             round_name="opening",
             temperature=settings.council_temperature,
             max_parallel=max_parallel,
+            timeout_seconds=effective_timeout,
             request=request,
             debug_context=debug_context,
         ):
@@ -593,6 +604,7 @@ async def run_roundtable(
                 round_name="critique",
                 temperature=settings.stage2_temperature,  # Lower for precise critique
                 max_parallel=max_parallel,
+                timeout_seconds=effective_timeout,
                 request=request,
                 debug_context=debug_context,
             ):
@@ -631,6 +643,7 @@ async def run_roundtable(
                     round_name="revision",
                     temperature=settings.council_temperature,
                     max_parallel=max_parallel,
+                    timeout_seconds=effective_timeout,
                     request=request,
                     debug_context=debug_context,
                 ):
@@ -687,7 +700,10 @@ async def run_roundtable(
 
         try:
             moderator_response = await query_model(
-                moderator_model, moderator_messages, timeout=180.0, temperature=settings.chairman_temperature
+                moderator_model,
+                moderator_messages,
+                timeout=effective_timeout,
+                temperature=settings.chairman_temperature,
             )
 
             moderator_content = moderator_response.get("content", "")
@@ -737,7 +753,10 @@ async def run_roundtable(
 
         try:
             chair_response = await query_model(
-                chair_model, chair_messages, timeout=180.0, temperature=settings.chairman_temperature
+                chair_model,
+                chair_messages,
+                timeout=effective_timeout,
+                temperature=settings.chairman_temperature,
             )
 
             chair_content = chair_response.get("content", "")

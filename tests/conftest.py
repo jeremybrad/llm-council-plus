@@ -235,5 +235,6 @@ def mock_settings():
         chairman_model = "mock:chairman"
         roundtable_num_rounds = 3
         roundtable_max_parallel = 2
+        roundtable_timeout_seconds = 120.0
 
     return MockSettings()

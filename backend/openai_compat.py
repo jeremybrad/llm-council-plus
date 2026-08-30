@@ -236,6 +236,9 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
     moderator_model = request.moderator_model or settings.chairman_model
     chair_model = request.chair_model or settings.chairman_model
     max_parallel = request.max_parallel or settings.roundtable_max_parallel
+    timeout_seconds = (
+        request.timeout_seconds if request.timeout_seconds is not None else settings.roundtable_timeout_seconds
+    )
 
     # Generate a conversation ID for this request
     conversation_id = f"openai-compat-{uuid.uuid4().hex[:12]}"
@@ -253,6 +256,7 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
             context=context,
             num_rounds=num_rounds,
             max_parallel=max_parallel,
+            timeout_seconds=timeout_seconds,
             request=http_request,
         ):
             event_type = event.get("type")
@@ -446,6 +450,9 @@ async def generate_non_streaming_response(
     moderator_model = request.moderator_model or settings.chairman_model
     chair_model = request.chair_model or settings.chairman_model
     max_parallel = request.max_parallel or settings.roundtable_max_parallel
+    timeout_seconds = (
+        request.timeout_seconds if request.timeout_seconds is not None else settings.roundtable_timeout_seconds
+    )
 
     conversation_id = f"openai-compat-{uuid.uuid4().hex[:12]}"
 
@@ -462,6 +469,7 @@ async def generate_non_streaming_response(
             context=context,
             num_rounds=num_rounds,
             max_parallel=max_parallel,
+            timeout_seconds=timeout_seconds,
             request=http_request,
         ):
             if event.get("type") == "chair_complete":

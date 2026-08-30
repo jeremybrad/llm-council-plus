@@ -179,6 +179,7 @@ class Settings(BaseModel):
     # Roundtable Mode Settings
     roundtable_num_rounds: int = 3  # Number of deliberation rounds (1-5)
     roundtable_max_parallel: int = 2  # Max concurrent model queries (for local models)
+    roundtable_timeout_seconds: float = 120.0  # Per-model request timeout across a roundtable run
     roundtable_debug_prompts: bool = False  # Dump rendered prompts to data/debug/prompts/
 
 
