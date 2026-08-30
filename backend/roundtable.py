@@ -378,9 +378,9 @@ async def run_round_parallel(
     round_name: str,
     temperature: float = 0.5,
     max_parallel: int = 2,
-    timeout_seconds: float = 120.0,
     request: Any = None,
     debug_context: dict[str, str] | None = None,
+    timeout_seconds: float = 120.0,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run a round with bounded parallel execution.
 
@@ -482,9 +482,9 @@ async def run_roundtable(
     output_format: str = "Markdown with clear headings",
     num_rounds: int = 3,
     max_parallel: int = 2,
-    timeout_seconds: float | None = None,
     request: Any = None,
     role_context: dict[str, dict] | None = None,
+    timeout_seconds: float | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run a complete roundtable deliberation.
 
@@ -501,11 +501,11 @@ async def run_roundtable(
         output_format: Requested output format
         num_rounds: Number of deliberation rounds (default 3)
         max_parallel: Max concurrent model queries
-        timeout_seconds: Per-model request timeout; defaults to the settings value
         request: FastAPI request for disconnect checking
         role_context: Optional per-role context injection (JIT Context from Brain on Tap)
             Format: {"builder": {"facts": [...], "claims": [...]}, "skeptic": {"facts": [...]}, ...}
             Keys are role keys (builder, skeptic, historian, pragmatist, stylist, contrarian)
+        timeout_seconds: Per-model request timeout; defaults to the settings value
 
     Yields:
         Events: roundtable_init, round_start, round_progress, round_complete,
