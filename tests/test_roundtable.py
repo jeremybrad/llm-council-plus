@@ -21,8 +21,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.roundtable import (
     run_roundtable,
+    run_round_parallel,
+    query_agent,
     get_default_council,
     AgentConfig,
+    RoundResponse,
     RoundtableRun,
     load_template,
     format_round1_prompt,
@@ -129,6 +132,142 @@ class TestRoundtableExecution:
             # Verify content makes sense
             assert "Summary" in run_data["moderator_summary"]["content"] or "consensus" in run_data["moderator_summary"]["content"].lower()
             assert "Final" in run_data["chair_final"]["content"] or "synthesis" in run_data["chair_final"]["content"].lower()
+
+    @pytest.mark.asyncio
+    async def test_timeout_override_reaches_council_moderator_and_chair(self, mock_query_model, mock_settings):
+        """Use one caller-supplied timeout for every provider-neutral query."""
+        timeout_seconds = 37.25
+        agents = [
+            AgentConfig(model="mock:builder", role="builder", label="Builder"),
+            AgentConfig(model="mock:skeptic", role="skeptic", label="Skeptic"),
+        ]
+
+        with patch("backend.roundtable.query_model", mock_query_model), patch(
+            "backend.roundtable.get_settings", return_value=mock_settings
+        ):
+            async for _ in run_roundtable(
+                conversation_id="test-timeout-override",
+                question="Test timeout propagation",
+                agents=agents,
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=3,
+                timeout_seconds=timeout_seconds,
+            ):
+                pass
+
+        assert len(mock_query_model.call_log) == 8
+        assert {call["timeout"] for call in mock_query_model.call_log} == {timeout_seconds}
+        assert {call["model"] for call in mock_query_model.call_log} >= {
+            "mock:builder",
+            "mock:skeptic",
+            "mock:moderator",
+            "mock:chair",
+        }
+
+    @pytest.mark.asyncio
+    async def test_timeout_defaults_to_settings_for_every_roundtable_query(self, mock_query_model, mock_settings):
+        """Use the settings default when a caller does not supply an override."""
+        mock_settings.roundtable_timeout_seconds = 81.5
+        agents = [
+            AgentConfig(model="mock:builder", role="builder", label="Builder"),
+        ]
+
+        with patch("backend.roundtable.query_model", mock_query_model), patch(
+            "backend.roundtable.get_settings", return_value=mock_settings
+        ):
+            async for _ in run_roundtable(
+                conversation_id="test-timeout-default",
+                question="Test timeout fallback",
+                agents=agents,
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=1,
+            ):
+                pass
+
+        assert {call["timeout"] for call in mock_query_model.call_log} == {81.5}
+
+    @pytest.mark.asyncio
+    async def test_timeout_failure_is_reported_as_an_agent_error(self):
+        """Keep timeout failures in the provider-neutral RoundResponse contract."""
+        agent = AgentConfig(model="mock:builder", role="builder", label="Builder")
+
+        with patch("backend.roundtable.query_model", new=AsyncMock(side_effect=asyncio.TimeoutError("sentinel timeout"))):
+            response = await query_agent(agent, "Test timeout failure", timeout=37.25)
+
+        assert response.content == ""
+        assert response.error == "sentinel timeout"
+
+    @pytest.mark.asyncio
+    async def test_run_round_parallel_keeps_existing_positional_arguments_before_timeout(self):
+        """Append the timeout parameter without reinterpreting existing positional callers."""
+        agents = [AgentConfig(model="mock:builder", role="builder", label="Builder")]
+        request = AsyncMock()
+        request.is_disconnected.return_value = False
+        debug_context = {"run_id": "positional", "round_name": "opening"}
+        captured_kwargs = {}
+
+        async def capture_query_agent(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return RoundResponse(
+                agent_label="Builder",
+                model="mock:builder",
+                role="Builder",
+                content="Done",
+                error=None,
+                duration_ms=0,
+            )
+
+        with patch("backend.roundtable.query_agent", side_effect=capture_query_agent):
+            async for _ in run_round_parallel(
+                agents,
+                {"Builder": "Test"},
+                1,
+                "opening",
+                0.5,
+                1,
+                request,
+                debug_context,
+                37.25,
+            ):
+                pass
+
+        assert captured_kwargs["timeout"] == 37.25
+        assert captured_kwargs["debug_context"] == debug_context
+
+    @pytest.mark.asyncio
+    async def test_run_roundtable_appends_timeout_after_existing_positional_arguments(
+        self, mock_query_model, mock_settings
+    ):
+        """Keep request and role_context positions stable when a timeout is positional."""
+        agents = [AgentConfig(model="mock:builder", role="builder", label="Builder")]
+        request = AsyncMock()
+        request.is_disconnected.return_value = False
+        role_context = {"builder": {"facts": ["positional context"]}}
+
+        with patch("backend.roundtable.query_model", mock_query_model), patch(
+            "backend.roundtable.get_settings", return_value=mock_settings
+        ):
+            async for _ in run_roundtable(
+                "test-positional-timeout",
+                "Test positional compatibility",
+                agents,
+                "mock:moderator",
+                "mock:chair",
+                "",
+                "",
+                "Markdown",
+                1,
+                1,
+                request,
+                role_context,
+                37.25,
+            ):
+                pass
+
+        assert agents[0].context_capsule == role_context["builder"]
+        assert {call["timeout"] for call in mock_query_model.call_log} == {37.25}
 
 
 class TestTemplateSubstitution:

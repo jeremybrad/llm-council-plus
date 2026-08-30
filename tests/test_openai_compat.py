@@ -392,6 +392,103 @@ class TestConfigurationInheritance:
             assert captured_kwargs.get("chair_model") == "request:chair"
 
     @pytest.mark.asyncio
+    async def test_streaming_timeout_preserves_explicit_falsy_override(self, mock_settings):
+        """Do not replace an explicit 0.0 streaming timeout with the settings fallback."""
+        mock_settings.council_models = ["mock:model1", "mock:model2"]
+        mock_settings.chairman_model = "mock:chair"
+        mock_settings.roundtable_timeout_seconds = 81.5
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="Test")],
+            timeout_seconds=0.0,
+        )
+        captured_kwargs = {}
+
+        with patch("backend.openai_compat.run_roundtable") as mock_roundtable, patch(
+            "backend.openai_compat.get_settings", return_value=mock_settings
+        ):
+
+            async def capture_and_yield(*args, **kwargs):
+                captured_kwargs.update(kwargs)
+                yield {"type": "chair_complete", "chair_final": {"content": "Done"}}
+
+            mock_roundtable.side_effect = capture_and_yield
+
+            async for _ in generate_openai_stream(request):
+                pass
+
+        assert captured_kwargs["timeout_seconds"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_streaming_timeout_uses_non_default_settings_fallback(self, mock_settings):
+        """Forward a non-default settings timeout when streaming omits an override."""
+        mock_settings.council_models = ["mock:model1", "mock:model2"]
+        mock_settings.chairman_model = "mock:chair"
+        mock_settings.roundtable_timeout_seconds = 81.5
+        request = ChatCompletionRequest(messages=[ChatMessage(role="user", content="Test")])
+        captured_kwargs = {}
+
+        with patch("backend.openai_compat.run_roundtable") as mock_roundtable, patch(
+            "backend.openai_compat.get_settings", return_value=mock_settings
+        ):
+
+            async def capture_and_yield(*args, **kwargs):
+                captured_kwargs.update(kwargs)
+                yield {"type": "chair_complete", "chair_final": {"content": "Done"}}
+
+            mock_roundtable.side_effect = capture_and_yield
+
+            async for _ in generate_openai_stream(request):
+                pass
+
+        assert captured_kwargs["timeout_seconds"] == 81.5
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_timeout_uses_settings_fallback(self, mock_settings):
+        """Forward the settings timeout when a non-streaming request omits it."""
+        mock_settings.council_models = ["mock:model1", "mock:model2"]
+        mock_settings.chairman_model = "mock:chair"
+        mock_settings.roundtable_timeout_seconds = 81.5
+        request = ChatCompletionRequest(messages=[ChatMessage(role="user", content="Test")], stream=False)
+        captured_kwargs = {}
+
+        with patch("backend.openai_compat.run_roundtable") as mock_roundtable, patch(
+            "backend.openai_compat.get_settings", return_value=mock_settings
+        ):
+
+            async def capture_and_yield(*args, **kwargs):
+                captured_kwargs.update(kwargs)
+                yield {"type": "chair_complete", "chair_final": {"content": "Done"}}
+
+            mock_roundtable.side_effect = capture_and_yield
+            await generate_non_streaming_response(request)
+
+        assert captured_kwargs["timeout_seconds"] == 81.5
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_timeout_preserves_explicit_falsy_override(self, mock_settings):
+        """Do not replace an explicit 0.0 non-streaming timeout with the settings fallback."""
+        mock_settings.council_models = ["mock:model1", "mock:model2"]
+        mock_settings.chairman_model = "mock:chair"
+        mock_settings.roundtable_timeout_seconds = 81.5
+        request = ChatCompletionRequest(
+            messages=[ChatMessage(role="user", content="Test")], stream=False, timeout_seconds=0.0
+        )
+        captured_kwargs = {}
+
+        with patch("backend.openai_compat.run_roundtable") as mock_roundtable, patch(
+            "backend.openai_compat.get_settings", return_value=mock_settings
+        ):
+
+            async def capture_and_yield(*args, **kwargs):
+                captured_kwargs.update(kwargs)
+                yield {"type": "chair_complete", "chair_final": {"content": "Done"}}
+
+            mock_roundtable.side_effect = capture_and_yield
+            await generate_non_streaming_response(request)
+
+        assert captured_kwargs["timeout_seconds"] == 0.0
+
+    @pytest.mark.asyncio
     async def test_model_string_override(self, mock_query_model, mock_settings):
         """Test that model string (roundtable:fast) overrides default rounds."""
         mock_settings.council_models = ["mock:model1", "mock:model2"]
