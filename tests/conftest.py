@@ -1,13 +1,7 @@
 """Pytest fixtures for roundtable tests."""
 
-import asyncio
-import json
-import os
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Dict, Any, List
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -116,14 +110,18 @@ def mock_query_model():
     """
     call_log = []
 
-    async def mock_impl(model: str, messages: List[Dict[str, str]], timeout: float = 120.0, temperature: float = 0.7) -> Dict[str, Any]:
+    async def mock_impl(
+        model: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
+    ) -> dict[str, Any]:
         """Mock implementation of query_model."""
-        call_log.append({
-            "model": model,
-            "messages": messages,
-            "timeout": timeout,
-            "temperature": temperature,
-        })
+        call_log.append(
+            {
+                "model": model,
+                "messages": messages,
+                "timeout": timeout,
+                "temperature": temperature,
+            }
+        )
 
         # Analyze the prompt to determine what kind of response to generate
         user_content = ""
@@ -225,6 +223,7 @@ def mock_query_model():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for testing."""
+
     class MockSettings:
         council_temperature = 0.5
         stage2_temperature = 0.3
@@ -236,5 +235,7 @@ def mock_settings():
         roundtable_num_rounds = 3
         roundtable_max_parallel = 2
         roundtable_timeout_seconds = 120.0
+        roundtable_max_calls_per_run = 14
+        roundtable_subscription_max_parallel = 2
 
     return MockSettings()

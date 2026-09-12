@@ -262,6 +262,28 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
             event_type = event.get("type")
 
             # Stream progress as content deltas
+            if event_type == "roundtable_budget_exceeded":
+                progress_msg = (
+                    f"ERROR: predicted {event.get('predicted_calls')} model calls exceed "
+                    f"roundtable_max_calls_per_run={event.get('max_calls_per_run')}. "
+                    "Quota units are unknown, not zero."
+                )
+                chunk = ChatCompletionChunk(
+                    id=completion_id,
+                    created=created,
+                    model=request.model,
+                    choices=[
+                        ChatCompletionChoice(
+                            index=0,
+                            delta={"content": progress_msg},
+                            finish_reason="stop",
+                        )
+                    ],
+                )
+                yield f"data: {chunk.model_dump_json()}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
             if event_type == "roundtable_init":
                 total_rounds = event.get("total_rounds", num_rounds)
                 council_size = len(event.get("council_members", []))
@@ -472,7 +494,13 @@ async def generate_non_streaming_response(
             timeout_seconds=timeout_seconds,
             request=http_request,
         ):
-            if event.get("type") == "chair_complete":
+            if event.get("type") == "roundtable_budget_exceeded":
+                final_content = (
+                    f"Error: predicted {event.get('predicted_calls')} model calls exceed "
+                    f"roundtable_max_calls_per_run={event.get('max_calls_per_run')}. "
+                    "Quota units are unknown, not zero."
+                )
+            elif event.get("type") == "chair_complete":
                 chair_final = event.get("chair_final", {})
                 final_content = chair_final.get("content", "")
 
@@ -491,7 +519,9 @@ async def generate_non_streaming_response(
             )
         ],
         usage=ChatCompletionUsage(
-            prompt_tokens=0,  # We don't track tokens yet
+            # OpenAI schema requires integers. These zeros are compatibility
+            # placeholders, not measured subscription quota (unknown, not zero).
+            prompt_tokens=0,
             completion_tokens=0,
             total_tokens=0,
         ),

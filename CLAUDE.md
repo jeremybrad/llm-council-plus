@@ -73,7 +73,7 @@ This fixes binary incompatibilities (e.g., `@rollup/rollup-darwin-*` variants).
 
 **Provider System** (`backend/providers/`)
 - **Base**: `base.py` - Abstract interface for all LLM providers
-- **Implementations**: `openrouter.py`, `ollama.py`, `groq.py`, `openai.py`, `anthropic.py`, `google.py`, `mistral.py`, `deepseek.py`, `custom_openai.py`, `agent_cli.py` (subscription CLI, `agentcli:claude`)
+- **Implementations**: `openrouter.py`, `ollama.py`, `groq.py`, `openai.py`, `anthropic.py`, `google.py`, `mistral.py`, `deepseek.py`, `custom_openai.py`, `agent_cli.py` (subscription CLIs: `agentcli:claude`, `agentcli:grok`, `agentcli:codex`)
 - **Auto-routing**: Model IDs with prefix (e.g., `openai:gpt-4.1`, `ollama:llama3`, `custom:model-name`, `agentcli:claude`) route to correct provider
 - **Routing logic**: `council.py:get_provider_for_model()` handles prefix parsing
 
@@ -344,10 +344,12 @@ response = client.chat.completions.create(
         "num_rounds": 2,
         "chair_model": "ollama:llama3.2",
         "max_parallel": 2,
-        "timeout_seconds": 120
+        "timeout_seconds": 120  # wired through to each model call (WOR-396)
     }
 )
 ```
+
+`timeout_seconds` is live. `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2) when any `agentcli:` seat is in the run. Predicted calls above `roundtable_max_calls_per_run` fail before the first invocation. A call-budget of `0` is a real lockout, not a missing default. Parallelism floors at 1.
 
 ### Streaming Progress
 
@@ -477,4 +479,20 @@ Reports are generated in the `reports/` directory:
 
 ### AgentCLI subscription boundary
 
-The Claude seat resolves only C010 scripts/agent_launch/claude-subscription through C010_ROOT, CODELOCAL_ROOT, or the Mac CodeLocal default. Arbitrary/raw binary overrides and API-key inputs are refused. The launcher verifies subscription auth and strips registered model-billing credentials. Auth validation uses auth status without inference. Inference uses safe mode, no tools/MCP/browser/session persistence; cancellation and timeout kill the child process group. No metered fallback is used by this seat.
+Seats resolve only C010 `scripts/agent_launch/{claude,grok,codex}-subscription` through `C010_ROOT`, `CODELOCAL_ROOT`, or the Mac CodeLocal default. Raw vendor binaries and API keys are refused. Launchers strip registered model-billing credentials.
+
+| Seat | Launcher | Auth check (no inference) | Invocation |
+| --- | --- | --- | --- |
+| `agentcli:claude` | `claude-subscription` | `auth status` JSON (`loggedIn`, `claude.ai`, nonempty `subscriptionType`) | `-p --output-format json`, stdin prompt, `--safe-mode`, no tools/MCP |
+| `agentcli:grok` | `grok-subscription` | `--hermetic models` banner `logged in with grok.com` | `--hermetic --model grok-4.6 --output-format json --prompt-file`, `--no-subagents --no-memory --disable-web-search` |
+| `agentcli:codex` | `codex-subscription` | `login status` reports a positive ChatGPT login banner (not `Not logged in…`) | `exec --json --sandbox read-only --ephemeral --skip-git-repo-check -` (stdin). Uses the **installed CLI default model**; no unverified `-m` pin |
+
+`enabled_providers.agentcli` defaults **false**. That is an implemented seat, not an enabled production setting. Cancellation and timeout kill the child process group. No metered fallback.
+
+### Roundtable call budget (WOR-402)
+
+Predicted calls = `len(council) * num_rounds + 2` (moderator + chair). `roundtable_max_calls_per_run` (default 14) fails fast **before** any invocation if predicted > budget. The run record stores `call_accounting`: predicted/attempted/failed counts. These are CLI invocations, **not** provider quota units. Unavailable quota is recorded as `unknown`, never `0`. When any `agentcli:` seat is present, `roundtable_subscription_max_parallel` (default 2) is a ceiling: the per-run argument can only lower it. Both the setting and the per-run value floor at 1 (serialize); neither is a lockout. Overnight Night Shift scheduling is not implemented.
+
+`roundtable:fast` is 1 round (4 seats → 6 predicted calls) and is the recommended casual path.
+
+`timeout_seconds` on the OpenAI-compat extra_body is wired through (WOR-396); it is no longer a no-op.
