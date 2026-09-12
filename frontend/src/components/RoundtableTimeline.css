@@ -313,3 +313,14 @@
     color: #3b82f6;
     font-weight: 600;
 }
+
+.roundtable-call-accounting {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin: 0.75rem 0;
+}
+
+.roundtable-call-accounting small {
+    flex-basis: 100%;
+}
