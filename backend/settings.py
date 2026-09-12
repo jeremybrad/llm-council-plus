@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .prompts import STAGE1_PROMPT_DEFAULT, STAGE2_PROMPT_DEFAULT, STAGE3_PROMPT_DEFAULT
 from .search import SearchProvider
@@ -22,6 +22,7 @@ DEFAULT_ENABLED_PROVIDERS = {
     "groq": False,
     "direct": False,  # Master toggle for all direct connections
     "custom": False,  # Custom OpenAI-compatible endpoint
+    "agentcli": False,  # Headless subscription CLIs (local start.sh only)
 }
 
 # Default direct provider toggles (individual)
@@ -144,6 +145,11 @@ class Settings(BaseModel):
     custom_endpoint_url: str | None = None
     custom_endpoint_api_key: str | None = None
 
+    # Headless subscription-CLI provider (WOR-397). Optional absolute path;
+    # empty/None uses `claude` on PATH.
+    # Optional explicit canonical C010 launcher path; arbitrary binaries are refused.
+    agentcli_binary_path: str | None = None
+
     # Enabled Providers (which sources are available for council selection)
     enabled_providers: dict[str, bool] = DEFAULT_ENABLED_PROVIDERS.copy()
 
@@ -181,6 +187,12 @@ class Settings(BaseModel):
     roundtable_max_parallel: int = 2  # Max concurrent model queries (for local models)
     roundtable_timeout_seconds: float = 120.0  # Per-model request timeout across a roundtable run
     roundtable_debug_prompts: bool = False  # Dump rendered prompts to data/debug/prompts/
+
+    @model_validator(mode="after")
+    def merge_enabled_provider_defaults(self):
+        """Keep newly added provider keys present on older settings.json files."""
+        self.enabled_providers = {**DEFAULT_ENABLED_PROVIDERS, **(self.enabled_providers or {})}
+        return self
 
 
 def get_settings() -> Settings:

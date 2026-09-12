@@ -802,11 +802,18 @@ async def get_models():
 
     # Try dynamic fetch first
     dynamic_models = await fetch_models()
-    if dynamic_models:
-        return {"models": dynamic_models}
+    models = list(dynamic_models) if dynamic_models else list(AVAILABLE_MODELS)
 
-    # Fallback to static list
-    return {"models": AVAILABLE_MODELS}
+    # Subscription-CLI seats are static and local; append when enabled so they
+    # appear in the existing /api/models picker with no frontend change.
+    settings = get_settings()
+    if settings.enabled_providers.get("agentcli", False):
+        try:
+            models.extend(await PROVIDERS["agentcli"].get_models())
+        except Exception as e:
+            print(f"Error fetching models for agentcli: {e}")
+
+    return {"models": models}
 
 
 @app.get("/api/models/direct")
@@ -931,11 +938,12 @@ async def test_provider_api(request: TestProviderRequest):
         if hasattr(settings, setting_key):
             api_key = getattr(settings, setting_key)
 
-    if not api_key:
+    # agentcli authenticates via the local CLI, not an API key.
+    if not api_key and request.provider_id != "agentcli":
         return {"success": False, "message": "No API key provided or configured"}
 
     provider = PROVIDERS[request.provider_id]
-    return await provider.validate_key(api_key)
+    return await provider.validate_key(api_key or "")
 
 
 class TestOllamaRequest(BaseModel):

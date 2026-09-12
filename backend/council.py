@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from .config import get_chairman_model, get_council_models
+from .providers.agent_cli import AgentCLIProvider
 from .providers.anthropic import AnthropicProvider
 from .providers.custom_openai import CustomOpenAIProvider
 from .providers.deepseek import DeepSeekProvider
@@ -29,6 +30,7 @@ PROVIDERS = {
     "openrouter": OpenRouterProvider(),
     "ollama": OllamaProvider(),
     "custom": CustomOpenAIProvider(),
+    "agentcli": AgentCLIProvider(),
 }
 
 

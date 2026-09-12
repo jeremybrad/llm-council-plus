@@ -73,8 +73,8 @@ This fixes binary incompatibilities (e.g., `@rollup/rollup-darwin-*` variants).
 
 **Provider System** (`backend/providers/`)
 - **Base**: `base.py` - Abstract interface for all LLM providers
-- **Implementations**: `openrouter.py`, `ollama.py`, `groq.py`, `openai.py`, `anthropic.py`, `google.py`, `mistral.py`, `deepseek.py`, `custom_openai.py`
-- **Auto-routing**: Model IDs with prefix (e.g., `openai:gpt-4.1`, `ollama:llama3`, `custom:model-name`) route to correct provider
+- **Implementations**: `openrouter.py`, `ollama.py`, `groq.py`, `openai.py`, `anthropic.py`, `google.py`, `mistral.py`, `deepseek.py`, `custom_openai.py`, `agent_cli.py` (subscription CLI, `agentcli:claude`)
+- **Auto-routing**: Model IDs with prefix (e.g., `openai:gpt-4.1`, `ollama:llama3`, `custom:model-name`, `agentcli:claude`) route to correct provider
 - **Routing logic**: `council.py:get_provider_for_model()` handles prefix parsing
 
 **Core Modules**
@@ -474,3 +474,7 @@ Reports are generated in the `reports/` directory:
 - Custom ranking criteria (beyond accuracy/insight)
 - Backend caching for repeated queries
 - Multiple custom endpoints support
+
+### AgentCLI subscription boundary
+
+The Claude seat resolves only C010 scripts/agent_launch/claude-subscription through C010_ROOT, CODELOCAL_ROOT, or the Mac CodeLocal default. Arbitrary/raw binary overrides and API-key inputs are refused. The launcher verifies subscription auth and strips registered model-billing credentials. Auth validation uses auth status without inference. Inference uses safe mode, no tools/MCP/browser/session persistence; cancellation and timeout kill the child process group. No metered fallback is used by this seat.
