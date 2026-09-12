@@ -26,7 +26,8 @@ export default function RoundtableTimeline({
         return null;
     }
 
-    const { rounds, moderator, chair_final, council_members, status } = roundtable;
+    const { rounds, moderator, chair_final, council_members, status, call_accounting, error } = roundtable;
+    const count = (value) => Number.isInteger(value) && value >= 0 ? value : 'unknown';
     const isComplete = status === 'completed';
     const isAborted = status === 'aborted';
 
@@ -68,6 +69,16 @@ export default function RoundtableTimeline({
                 </div>
                 <StageTimer startTime={startTime} endTime={endTime} label="Total" />
             </div>
+
+            {call_accounting && (
+                <section className="roundtable-call-accounting" aria-label="Run call counts" aria-live="polite">
+                    <span>Predicted: {count(call_accounting.predicted_calls)}</span>
+                    <span>Attempted: {count(call_accounting.attempted_calls)}</span>
+                    <span>Failed: {count(call_accounting.failed_calls)}</span>
+                    <small>Counts update at start and finish. Calls are invocations. Provider quota usage: unknown.</small>
+                </section>
+            )}
+            {error && <p role="alert">{error}</p>}
 
             {/* Rounds Timeline */}
             <div className="rounds-container">

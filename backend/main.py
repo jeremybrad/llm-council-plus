@@ -295,8 +295,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
 
                         # Transform backend events to frontend format
                         if event_type == "roundtable_init":
-                            # Already sent roundtable_start above, skip this
-                            continue
+                            yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': event.get('call_accounting')})}\n\n"
 
                         elif event_type == "round_start":
                             yield f"data: {json.dumps({'type': 'round_start', 'data': {'round_number': event.get('round_number'), 'round_name': event.get('round_name')}})}\n\n"
@@ -321,17 +320,20 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         elif event_type == "chair_complete":
                             # Store run data for saving
                             run_data = event.get("run")
+                            yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             yield f"data: {json.dumps({'type': 'chair_complete', 'data': event.get('chair_final')})}\n\n"
                             # Send roundtable_complete
                             yield f"data: {json.dumps({'type': 'roundtable_complete'})}\n\n"
 
                         elif event_type == "roundtable_budget_exceeded":
                             run_data = event.get("run")
+                            yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
                             yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
 
                         elif event_type == "roundtable_aborted":
                             run_data = event.get("run")
+                            yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
                             yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted'})}\n\n"
 

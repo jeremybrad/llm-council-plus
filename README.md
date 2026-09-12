@@ -457,3 +457,17 @@ Contributions are welcome! This project embraces the spirit of "vibe coding" - f
   <strong>Built with the collective wisdom of AI</strong><br>
   <em>Ask the council. Get better answers.</em>
 </p>
+
+### Subscription call counts and quota
+
+For casual use, choose `roundtable:fast`: one round uses six predicted calls with four seats, including moderator and chair. `roundtable_max_calls_per_run` rejects a run before invoking any model when the prediction exceeds its configured call limit. Subscription-seat concurrency defaults to at most two.
+
+The timeline displays predicted, attempted and failed calls from the run ledger, including failed or budget-rejected runs. An unavailable count is **unknown**, not zero. Counts are invocations and do not measure subscription quota consumption. This display does not enable a provider.
+
+| Subscription seat | Quota interpretation |
+| --- | --- |
+| Claude | Interactive Claude use and the seat draw on the subscription account; inspect Claude's current usage surface for account limits. The run cannot determine quota units consumed. |
+| Codex | Inspect the signed-in Codex account's usage limits; an invocation count does not identify remaining allowance or reset timing. |
+| Grok | Inspect the signed-in Grok subscription's current usage information; no quota-unit measurement is inferred from model calls. |
+
+Exact allowances vary by account and product. WOR-397's separate live quota acceptance remains open. Overnight scheduling is not implemented or activated by these guardrails.

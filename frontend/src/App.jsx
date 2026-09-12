@@ -4,6 +4,7 @@ import ChatInterface from './components/ChatInterface';
 import Settings from './components/Settings';
 import AnalyzeTab from './components/AnalyzeTab';
 import { api } from './api';
+import { applyRoundtableEvent } from './utils/roundtableState';
 import './App.css';
 
 function App() {
@@ -781,6 +782,19 @@ function App() {
               });
               break;
 
+            case 'roundtable_accounting':
+              setCurrentConversation((prev) => {
+                const messages = [...prev.messages];
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg) return prev;
+                messages[messages.length - 1] = {
+                  ...lastMsg,
+                  roundtable: applyRoundtableEvent(lastMsg.roundtable, event)
+                };
+                return { ...prev, messages };
+              });
+              break;
+
             case 'roundtable_complete':
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
@@ -796,10 +810,7 @@ function App() {
                     ...lastMsg.timers,
                     roundtableEnd: Date.now()
                   },
-                  roundtable: {
-                    ...lastMsg.roundtable,
-                    status: 'completed'
-                  }
+                  roundtable: applyRoundtableEvent(lastMsg.roundtable, event)
                 };
 
                 messages[messages.length - 1] = updatedLastMsg;
@@ -823,11 +834,7 @@ function App() {
                     ...lastMsg.timers,
                     roundtableEnd: Date.now()
                   },
-                  roundtable: {
-                    ...lastMsg.roundtable,
-                    status: 'error',
-                    error: event.message
-                  }
+                  roundtable: applyRoundtableEvent(lastMsg.roundtable, event)
                 };
 
                 messages[messages.length - 1] = updatedLastMsg;
