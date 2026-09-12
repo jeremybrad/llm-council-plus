@@ -51,11 +51,12 @@ def _result_json(text: str, is_error: bool = False) -> bytes:
 
 @pytest.fixture(autouse=True)
 def guarded_launcher(tmp_path, monkeypatch):
-    launcher = tmp_path / "scripts" / "agent_launch" / "claude-subscription"
-    launcher.parent.mkdir(parents=True)
-    launcher.write_text("# synthetic launcher; subprocess is mocked\n")
+    launch_dir = tmp_path / "scripts" / "agent_launch"
+    launch_dir.mkdir(parents=True)
+    for name in ("claude-subscription", "grok-subscription", "codex-subscription"):
+        (launch_dir / name).write_text("# synthetic launcher; subprocess is mocked\n")
     monkeypatch.setenv("C010_ROOT", str(tmp_path))
-    return launcher
+    return launch_dir / "claude-subscription"
 
 
 @pytest.fixture
@@ -173,6 +174,8 @@ async def test_get_models_static_list(provider):
         models = await provider.get_models()
     assert models[0]["id"] == "agentcli:claude"
     assert models[0]["provider"] == "AgentCLI"
+    ids = [m["id"] for m in models]
+    assert ids == ["agentcli:claude", "agentcli:grok", "agentcli:codex"]
 
 
 def test_prefix_routes_to_agentcli():
@@ -238,6 +241,8 @@ def test_api_models_appends_agentcli_when_enabled():
     ids = [m["id"] for m in response.json()["models"]]
     assert "openai/gpt-4o" in ids
     assert "agentcli:claude" in ids
+    assert "agentcli:grok" in ids
+    assert "agentcli:codex" in ids
 
 
 def test_api_models_omits_agentcli_when_disabled():
@@ -342,3 +347,134 @@ def test_live_cli_envelope_shapes(text):
     from backend.providers.agent_cli import _interpret_cli_result
 
     assert _interpret_cli_result(0, text, "") == {"content": "council ok", "error": False}
+
+
+def test_grok_json_uses_text_field():
+    from backend.providers.agent_cli import _interpret_grok_result
+
+    payload = json.dumps({"text": "grok ok", "sessionId": "abc", "stopReason": "end_turn"})
+    assert _interpret_grok_result(0, payload, "") == {"content": "grok ok", "error": False}
+
+
+def test_grok_error_object():
+    from backend.providers.agent_cli import _interpret_grok_result
+
+    payload = json.dumps({"type": "error", "message": "Couldn't start session"})
+    result = _interpret_grok_result(1, payload, "")
+    assert result["error"] is True
+    assert "Couldn't start session" in result["error_message"]
+
+
+def test_codex_item_completed_stream():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "t1"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "codex ok"},
+                }
+            ),
+            json.dumps({"type": "turn.completed"}),
+        ]
+    )
+    assert _interpret_codex_stream(0, stream, "") == {"content": "codex ok", "error": False}
+
+
+def test_codex_malformed_stream():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    result = _interpret_codex_stream(0, "not-json\nstill-not-json", "")
+    assert result["error"] is True
+    assert "JSON parse failure" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_grok_query_uses_hermetic_prompt_file(provider):
+    proc = _FakeProcess(stdout=json.dumps({"text": "isolated ok"}).encode(), returncode=0)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query("agentcli:grok", [{"role": "user", "content": "hello"}])
+    assert result == {"content": "isolated ok", "error": False}
+    argv = list(spawn.await_args.args)
+    assert Path(argv[0]).name == "grok-subscription"
+    assert "--hermetic" in argv
+    assert argv[argv.index("--model") + 1] == "grok-4.6"
+    assert argv[argv.index("--output-format") + 1] == "json"
+    assert "--prompt-file" in argv
+    assert "--no-subagents" in argv
+    assert "--no-memory" in argv
+    assert "--disable-web-search" in argv
+    assert spawn.await_args.kwargs["stdin"] is asyncio.subprocess.DEVNULL
+
+
+@pytest.mark.asyncio
+async def test_codex_query_uses_exec_json_and_stdin(provider):
+    stream = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "codex seat"}})
+    proc = _FakeProcess(stdout=stream.encode(), returncode=0)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query("agentcli:codex", [{"role": "user", "content": "hello"}])
+    assert result == {"content": "codex seat", "error": False}
+    argv = list(spawn.await_args.args)
+    assert Path(argv[0]).name == "codex-subscription"
+    assert argv[1:4] == ["exec", "--json", "--sandbox"]
+    assert "read-only" in argv
+    assert "--ephemeral" in argv
+    assert "--skip-git-repo-check" in argv
+    assert argv[-1] == "-"
+    assert spawn.await_args.kwargs["stdin"] is asyncio.subprocess.PIPE
+    assert proc.stdin_payload == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_unverified_codex_model_suffix_refused(provider):
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec") as spawn,
+    ):
+        result = await provider.query("agentcli:codex:o3", [{"role": "user", "content": "hi"}])
+    assert result["error"] is True
+    assert "Unsupported" in result["error_message"]
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_grok_timeout_cancels(provider):
+    proc = _FakeProcess(hang=True)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:grok", [{"role": "user", "content": "hi"}], timeout=0.05)
+    assert result["error"] is True
+    assert "timed out" in result["error_message"]
+    assert proc.killed is True
+
+
+@pytest.mark.asyncio
+async def test_validate_grok_models_banner():
+    from backend.providers.agent_cli import _validate_grok
+
+    proc = _FakeProcess(stdout=b"You are logged in with grok.com.\nDefault model: grok-4.6\n")
+    with patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn:
+        result = await _validate_grok("/tmp/grok-subscription")
+    assert result["success"] is True
+    assert spawn.await_args.args[-2:] == ("--hermetic", "models")
+
+
+@pytest.mark.asyncio
+async def test_validate_codex_login_status():
+    from backend.providers.agent_cli import _validate_codex
+
+    proc = _FakeProcess(stdout=b"Logged in using ChatGPT\n")
+    with patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn:
+        result = await _validate_codex("/tmp/codex-subscription")
+    assert result["success"] is True
+    assert spawn.await_args.args[-2:] == ("login", "status")

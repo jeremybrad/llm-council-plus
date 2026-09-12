@@ -36,7 +36,9 @@ DEFAULT_DIRECT_PROVIDER_TOGGLES = {
 }
 
 
-# Available models for selection (popular OpenRouter models)
+# Static picker fallback only. Live /api/models listings from enabled providers
+# are authoritative. These ids are historical OpenRouter names and must not be
+# treated as currently available products.
 AVAILABLE_MODELS = [
     # OpenAI
     {"id": "openai/gpt-4o", "name": "GPT-4o [OpenRouter]", "provider": "OpenAI", "source": "openrouter"},
@@ -187,6 +189,12 @@ class Settings(BaseModel):
     roundtable_max_parallel: int = 2  # Max concurrent model queries (for local models)
     roundtable_timeout_seconds: float = 120.0  # Per-model request timeout across a roundtable run
     roundtable_debug_prompts: bool = False  # Dump rendered prompts to data/debug/prompts/
+    # Call-budget guardrails (WOR-402). Predicted invocations = seats * rounds +
+    # moderator + chair. This is a CLI/model call counter, not a provider quota unit.
+    roundtable_max_calls_per_run: int = 14
+    # Hard cap applied when any agentcli: seat is in the run (default matches
+    # the existing semaphore default). Night Shift overnight scheduling is out of scope.
+    roundtable_subscription_max_parallel: int = 2
 
     @model_validator(mode="after")
     def merge_enabled_provider_defaults(self):

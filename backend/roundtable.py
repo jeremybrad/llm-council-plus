@@ -1,6 +1,7 @@
 """Roundtable Mode orchestrator - Multi-round collaborative deliberation."""
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -79,6 +80,7 @@ class RoundtableRun:
     rounds: list[RoundResult] = field(default_factory=list)
     moderator_summary: dict[str, Any] | None = None
     chair_final: dict[str, Any] | None = None
+    call_accounting: dict[str, Any] | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: str | None = None
 
@@ -104,9 +106,82 @@ class RoundtableRun:
             ],
             "moderator_summary": self.moderator_summary,
             "chair_final": self.chair_final,
+            "call_accounting": self.call_accounting,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
         }
+
+
+# Default roundtable is 4 seats × 3 rounds + moderator + chair = 14 CLI/model
+# invocations. This is a call counter, not a provider quota unit.
+DEFAULT_MAX_CALLS_PER_RUN = 14
+DEFAULT_SUBSCRIPTION_MAX_PARALLEL = 2
+QUOTA_UNITS_UNKNOWN = "unknown"
+
+
+def predict_roundtable_calls(n_agents: int, n_rounds: int) -> int:
+    """Predicted model invocations before a run starts.
+
+    Each council member is queried once per round, then moderator and chair
+    each make one synthesis call. Failures and retries are not predicted;
+    they are recorded as attempted calls during execution.
+    """
+    if n_agents < 1:
+        raise ValueError("roundtable requires at least one council agent")
+    if n_rounds < 1:
+        raise ValueError("roundtable requires at least one round")
+    return n_agents * n_rounds + 2
+
+
+def uses_subscription_seat(models: list[str]) -> bool:
+    return any(str(model).startswith("agentcli:") for model in models)
+
+
+class CallAccountant:
+    """Record attempted model invocations, including failures. Not quota units."""
+
+    def __init__(self, predicted: int) -> None:
+        self.predicted = predicted
+        self.attempts: list[dict[str, Any]] = []
+
+    def observe(self, model: str, result: dict[str, Any] | None = None, *, failed: bool = False) -> None:
+        error = failed or bool(result and result.get("error"))
+        self.attempts.append(
+            {
+                "model": model,
+                "failed": error,
+                "error_message": (result or {}).get("error_message") if error else None,
+            }
+        )
+
+    def begin(self, model: str) -> int:
+        self.attempts.append({"model": model, "failed": False, "error_message": None})
+        return len(self.attempts) - 1
+
+    def finish(self, index: int, result: dict[str, Any] | None = None, *, failed: bool = False) -> None:
+        item = self.attempts[index]
+        item["failed"] = failed or bool(result and result.get("error"))
+        if item["failed"]:
+            item["error_message"] = (result or {}).get("error_message") or item["error_message"]
+
+    def snapshot(self) -> dict[str, Any]:
+        failed = sum(1 for item in self.attempts if item["failed"])
+        return {
+            "predicted_calls": self.predicted,
+            "attempted_calls": len(self.attempts),
+            "failed_calls": failed,
+            "quota_units": QUOTA_UNITS_UNKNOWN,
+            "quota_note": (
+                "Call counts are CLI/model invocations. Provider quota units are "
+                "unavailable to this process and must not be treated as zero."
+            ),
+            "attempts": list(self.attempts),
+        }
+
+
+_call_accountant: contextvars.ContextVar[CallAccountant | None] = contextvars.ContextVar(
+    "roundtable_call_accountant", default=None
+)
 
 
 def load_template(template_name: str) -> str:
@@ -330,9 +405,13 @@ async def query_agent(
         )
 
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+    accountant = _call_accountant.get()
+    attempt = accountant.begin(agent.model) if accountant is not None else None
 
     try:
         response = await query_model(agent.model, messages, timeout, temperature)
+        if accountant is not None and attempt is not None:
+            accountant.finish(attempt, response)
         duration_ms = int((time.time() - start_time) * 1000)
 
         if response.get("error"):
@@ -358,8 +437,14 @@ async def query_agent(
             duration_ms=duration_ms,
         )
 
+    except asyncio.CancelledError:
+        if accountant is not None and attempt is not None:
+            accountant.finish(attempt, failed=True)
+        raise
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
+        if accountant is not None and attempt is not None:
+            accountant.finish(attempt, failed=True)
         logger.error(f"Error querying agent {agent.label}: {e}")
         return RoundResponse(
             agent_label=agent.label,
@@ -530,6 +615,20 @@ async def run_roundtable(
 
     settings = get_settings()
     effective_timeout = timeout_seconds if timeout_seconds is not None else settings.roundtable_timeout_seconds
+    predicted = predict_roundtable_calls(len(agents), num_rounds)
+    budget = int(
+        getattr(settings, "roundtable_max_calls_per_run", DEFAULT_MAX_CALLS_PER_RUN) or DEFAULT_MAX_CALLS_PER_RUN
+    )
+    subscription_parallel = int(
+        getattr(settings, "roundtable_subscription_max_parallel", DEFAULT_SUBSCRIPTION_MAX_PARALLEL)
+        or DEFAULT_SUBSCRIPTION_MAX_PARALLEL
+    )
+    seat_models = [a.model for a in agents] + [moderator_model, chair_model]
+    if uses_subscription_seat(seat_models):
+        max_parallel = min(max_parallel, subscription_parallel)
+    accountant = CallAccountant(predicted)
+    accountant_token = _call_accountant.set(accountant)
+    run.call_accounting = accountant.snapshot()
 
     # Debug context for prompt dumping (if enabled)
     debug_context = None
@@ -543,7 +642,23 @@ async def run_roundtable(
         "run_id": run_id,
         "total_rounds": num_rounds,
         "council_members": [{"label": a.label, "model": a.model, "role": a.role} for a in agents],
+        "call_accounting": accountant.snapshot(),
+        "max_parallel": max_parallel,
     }
+
+    if predicted > budget:
+        run.status = "budget_exceeded"
+        run.completed_at = datetime.utcnow().isoformat()
+        run.call_accounting = accountant.snapshot()
+        yield {
+            "type": "roundtable_budget_exceeded",
+            "predicted_calls": predicted,
+            "max_calls_per_run": budget,
+            "quota_units": QUOTA_UNITS_UNKNOWN,
+            "run": run.to_dict(),
+        }
+        _call_accountant.reset(accountant_token)
+        return
 
     try:
         # === ROUND 1: Opening Statements ===
@@ -705,6 +820,7 @@ async def run_roundtable(
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
+            accountant.observe(moderator_model, moderator_response)
 
             moderator_content = moderator_response.get("content", "")
             if not isinstance(moderator_content, str):
@@ -717,6 +833,7 @@ async def run_roundtable(
             }
 
         except Exception as e:
+            accountant.observe(moderator_model, failed=True)
             logger.error(f"Moderator synthesis failed: {e}")
             run.moderator_summary = {"model": moderator_model, "content": "", "error": True, "error_message": str(e)}
 
@@ -758,6 +875,7 @@ async def run_roundtable(
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
+            accountant.observe(chair_model, chair_response)
 
             chair_content = chair_response.get("content", "")
             if not isinstance(chair_content, str):
@@ -770,19 +888,24 @@ async def run_roundtable(
             }
 
         except Exception as e:
+            accountant.observe(chair_model, failed=True)
             logger.error(f"Chair synthesis failed: {e}")
             run.chair_final = {"model": chair_model, "content": "", "error": True, "error_message": str(e)}
 
         run.status = "completed"
         run.completed_at = datetime.utcnow().isoformat()
+        run.call_accounting = accountant.snapshot()
 
         yield {"type": "chair_complete", "chair_final": run.chair_final, "run": run.to_dict()}
 
     except asyncio.CancelledError:
         run.status = "aborted"
         run.completed_at = datetime.utcnow().isoformat()
+        run.call_accounting = accountant.snapshot()
         yield {"type": "roundtable_aborted", "run": run.to_dict()}
         raise
+    finally:
+        _call_accountant.reset(accountant_token)
 
 
 def get_default_council(models: list[str]) -> list[AgentConfig]:
