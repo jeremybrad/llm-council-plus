@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -48,6 +49,15 @@ def _result_json(text: str, is_error: bool = False) -> bytes:
     return json.dumps(payload).encode("utf-8")
 
 
+@pytest.fixture(autouse=True)
+def guarded_launcher(tmp_path, monkeypatch):
+    launcher = tmp_path / "scripts" / "agent_launch" / "claude-subscription"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("# synthetic launcher; subprocess is mocked\n")
+    monkeypatch.setenv("C010_ROOT", str(tmp_path))
+    return launcher
+
+
 @pytest.fixture
 def provider():
     return AgentCLIProvider()
@@ -72,7 +82,10 @@ async def test_success_parses_json_envelope(provider):
 
     assert result == {"content": "council ok", "error": False}
     argv = spawn.await_args.args
-    assert argv[0] == "claude"
+    assert Path(argv[0]).name == "claude-subscription"
+    assert "--safe-mode" in argv
+    assert argv[argv.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in argv
     assert "-p" in argv
     assert argv[argv.index("--output-format") + 1] == "json"
     assert "--disallowedTools" in argv
@@ -103,7 +116,7 @@ async def test_timeout_kills_process(provider):
 @pytest.mark.asyncio
 async def test_cli_missing(provider):
     with (
-        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings("/no/such/claude")),
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
         patch(
             "backend.providers.agent_cli.asyncio.create_subprocess_exec",
             AsyncMock(side_effect=FileNotFoundError("missing")),
@@ -178,9 +191,10 @@ def test_flatten_system_and_user():
 
 
 @pytest.mark.asyncio
-async def test_validate_key_reports_missing_binary(provider):
+async def test_validate_key_reports_missing_binary(provider, guarded_launcher):
+    guarded_launcher.unlink()
     with (
-        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings("missing-claude")),
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
         patch("backend.providers.agent_cli.shutil.which", return_value=None),
         patch("backend.providers.agent_cli.os.path.isfile", return_value=False),
     ):
@@ -260,3 +274,29 @@ def test_test_provider_allows_empty_key_for_agentcli():
     assert response.status_code == 200
     assert response.json()["success"] is False
     assert "not found" in response.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_raw_binary_override_refused_before_spawn(provider):
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings("claude")),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec") as spawn,
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+    assert result["error"] is True
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_validate_key_does_not_infer(provider):
+    proc = _FakeProcess(
+        stdout=json.dumps({"loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "max"}).encode()
+    )
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.validate_key("")
+    assert result["success"] is True
+    assert spawn.await_args.args[-2:] == ("auth", "status")
+    assert proc.stdin_payload is None

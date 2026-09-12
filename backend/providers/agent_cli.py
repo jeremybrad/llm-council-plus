@@ -1,6 +1,6 @@
 """Native subscription-CLI provider (Path B / WOR-397).
 
-MVP seat: `agentcli:claude` → headless `claude -p --output-format json`.
+MVP seat: `agentcli:claude` → the canonical guarded `claude-subscription -p --output-format json`.
 Prompt is piped on stdin (round-3 prompts exceed safe argv length). Tools are
 disabled and the process runs in a scratch cwd so a council seat cannot edit
 the repo. Temperature is dropped — vendor CLIs do not accept it.
@@ -12,7 +12,9 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from ..settings import get_settings
@@ -24,7 +26,7 @@ _DISALLOWED_TOOLS = (
     "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Agent,Skill,Task,TodoWrite,BashOutput,KillShell"
 )
 
-_DEFAULT_BINARY = "claude"
+_DEFAULT_BINARY = "claude-subscription"
 _DEFAULT_MODEL_ID = "agentcli:claude"
 
 # Auth-failure substrings observed in Claude Code stderr / result text.
@@ -61,8 +63,12 @@ class AgentCLIProvider(LLMProvider):
         if not prompt.strip():
             return {"error": True, "error_message": "Empty prompt"}
 
+        try:
+            binary = _resolve_binary(settings.agentcli_binary_path)
+        except ValueError as exc:
+            return {"error": True, "error_message": str(exc)}
         return await _invoke_claude(
-            binary=_resolve_binary(settings.agentcli_binary_path),
+            binary=binary,
             prompt=prompt,
             timeout=timeout,
         )
@@ -78,29 +84,61 @@ class AgentCLIProvider(LLMProvider):
         ]
 
     async def validate_key(self, api_key: str) -> dict[str, Any]:
-        """CLI presence + auth smoke test.
-
-        `api_key` is an optional binary-path override (there is no API key).
-        Smoke-tests even when the provider toggle is off.
-        """
-        settings = get_settings()
-        binary = _resolve_binary(api_key or settings.agentcli_binary_path)
-        if shutil.which(binary) is None and not os.path.isfile(binary):
-            return {"success": False, "message": f"agentcli binary not found: {binary}"}
-
-        smoke = await _invoke_claude(
-            binary=binary,
-            prompt="Reply with the single word pong.",
-            timeout=30.0,
+        """Check the guarded launcher's subscription authentication without inference."""
+        if api_key:
+            return {"success": False, "message": "agentcli accepts no API key or binary override"}
+        try:
+            binary = _resolve_binary(get_settings().agentcli_binary_path)
+        except ValueError as exc:
+            return {"success": False, "message": str(exc)}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                "auth",
+                "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError:
+            return {"success": False, "message": "guarded agentcli launcher not found"}
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except (TimeoutError, asyncio.TimeoutError):
+            await _kill(proc)
+            return {"success": False, "message": "guarded authentication check timed out"}
+        except asyncio.CancelledError:
+            await _kill(proc)
+            raise
+        try:
+            auth = json.loads(stdout)
+        except (ValueError, TypeError):
+            auth = {}
+        ok = (
+            proc.returncode == 0
+            and isinstance(auth, dict)
+            and auth.get("loggedIn") is True
+            and auth.get("authMethod") == "claude.ai"
+            and bool(auth.get("subscriptionType"))
         )
-        if smoke.get("error"):
-            return {"success": False, "message": smoke.get("error_message", "agentcli smoke test failed")}
-        return {"success": True, "message": "Claude Code CLI is present and authenticated"}
+        return {
+            "success": ok,
+            "message": "Claude subscription authenticated" if ok else "Subscription authentication unverified",
+        }
 
 
 def _resolve_binary(configured: str | None) -> str:
-    path = (configured or "").strip()
-    return path or _DEFAULT_BINARY
+    # C010 is the authority; never execute a PATH-selected raw vendor binary.
+    root = Path(
+        os.environ.get("C010_ROOT")
+        or (Path(os.environ.get("CODELOCAL_ROOT") or Path.home() / "CodeLocal") / "C010_standards")
+    )
+    launcher = root / "scripts" / "agent_launch" / "claude-subscription"
+    if configured and Path(configured).expanduser().resolve() != launcher.resolve():
+        raise ValueError("Only the canonical C010 guarded subscription launcher is permitted")
+    if not launcher.is_file():
+        raise ValueError("Canonical guarded agentcli launcher not found")
+    return str(launcher)
 
 
 def _flatten_messages(messages: list[dict[str, str]]) -> str:
@@ -117,6 +155,14 @@ async def _invoke_claude(*, binary: str, prompt: str, timeout: float) -> dict[st
     argv = [
         binary,
         "-p",
+        "--safe-mode",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--no-chrome",
+        "--no-session-persistence",
         "--output-format",
         "json",
         "--disallowedTools",
@@ -134,6 +180,7 @@ async def _invoke_claude(*, binary: str, prompt: str, timeout: float) -> dict[st
                 stderr=asyncio.subprocess.PIPE,
                 cwd=scratch,
                 env=os.environ.copy(),
+                start_new_session=True,
             )
         except FileNotFoundError:
             return {"error": True, "error_message": f"agentcli binary not found: {binary}"}
@@ -143,6 +190,10 @@ async def _invoke_claude(*, binary: str, prompt: str, timeout: float) -> dict[st
         except (TimeoutError, asyncio.TimeoutError):
             await _kill(proc)
             return {"error": True, "error_message": f"agentcli timed out after {timeout}s"}
+
+        except asyncio.CancelledError:
+            await _kill(proc)
+            raise
 
         stdout = stdout_b.decode("utf-8", errors="replace")
         stderr = stderr_b.decode("utf-8", errors="replace")
@@ -242,7 +293,10 @@ async def _kill(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
     try:
-        proc.kill()
+        if getattr(proc, "pid", None):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
     except ProcessLookupError:
         return
     try:

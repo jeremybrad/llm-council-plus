@@ -474,3 +474,7 @@ Reports are generated in the `reports/` directory:
 - Custom ranking criteria (beyond accuracy/insight)
 - Backend caching for repeated queries
 - Multiple custom endpoints support
+
+### AgentCLI subscription boundary
+
+The Claude seat resolves only C010 scripts/agent_launch/claude-subscription through C010_ROOT, CODELOCAL_ROOT, or the Mac CodeLocal default. Arbitrary/raw binary overrides and API-key inputs are refused. The launcher verifies subscription auth and strips registered model-billing credentials. Auth validation uses auth status without inference. Inference uses safe mode, no tools/MCP/browser/session persistence; cancellation and timeout kill the child process group. No metered fallback is used by this seat.

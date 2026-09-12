@@ -147,6 +147,7 @@ class Settings(BaseModel):
 
     # Headless subscription-CLI provider (WOR-397). Optional absolute path;
     # empty/None uses `claude` on PATH.
+    # Optional explicit canonical C010 launcher path; arbitrary binaries are refused.
     agentcli_binary_path: str | None = None
 
     # Enabled Providers (which sources are available for council selection)
