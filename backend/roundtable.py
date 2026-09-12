@@ -164,6 +164,8 @@ class CallAccountant:
 
     def finish(self, index: int, result: dict[str, Any] | None = None, *, failed: bool = False) -> None:
         item = self.attempts[index]
+        if not item.get("open"):
+            return
         item["open"] = False
         item["failed"] = failed or bool(result and result.get("error"))
         if item["failed"]:
@@ -644,6 +646,8 @@ async def run_roundtable(
     subscription_parallel = int(
         getattr(settings, "roundtable_subscription_max_parallel", DEFAULT_SUBSCRIPTION_MAX_PARALLEL)
     )
+    # 0 is a call-budget lockout, not a parallelism lockout (Semaphore(0) deadlocks).
+    subscription_parallel = max(1, subscription_parallel)
     seat_models = [a.model for a in agents] + [moderator_model, chair_model]
     if uses_subscription_seat(seat_models):
         max_parallel = min(max_parallel, subscription_parallel)

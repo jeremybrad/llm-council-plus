@@ -485,13 +485,13 @@ Seats resolve only C010 `scripts/agent_launch/{claude,grok,codex}-subscription` 
 | --- | --- | --- | --- |
 | `agentcli:claude` | `claude-subscription` | `auth status` JSON (`loggedIn`, `claude.ai`, nonempty `subscriptionType`) | `-p --output-format json`, stdin prompt, `--safe-mode`, no tools/MCP |
 | `agentcli:grok` | `grok-subscription` | `--hermetic models` banner `logged in with grok.com` | `--hermetic --model grok-4.6 --output-format json --prompt-file`, `--no-subagents --no-memory --disable-web-search` |
-| `agentcli:codex` | `codex-subscription` | `login status` reports a positive ChatGPT subscription banner (not `Not logged in…`) | `exec --json --sandbox read-only --ephemeral --skip-git-repo-check -` (stdin). Uses the **installed CLI default model**; no unverified `-m` pin |
+| `agentcli:codex` | `codex-subscription` | `login status` reports a positive ChatGPT login banner (not `Not logged in…`) | `exec --json --sandbox read-only --ephemeral --skip-git-repo-check -` (stdin). Uses the **installed CLI default model**; no unverified `-m` pin |
 
 `enabled_providers.agentcli` defaults **false**. That is an implemented seat, not an enabled production setting. Cancellation and timeout kill the child process group. No metered fallback.
 
 ### Roundtable call budget (WOR-402)
 
-Predicted calls = `len(council) * num_rounds + 2` (moderator + chair). `roundtable_max_calls_per_run` (default 14) fails fast **before** any invocation if predicted > budget. The run record stores `call_accounting`: predicted/attempted/failed counts. These are CLI invocations, **not** provider quota units. Unavailable quota is recorded as `unknown`, never `0`. When any `agentcli:` seat is present, `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2, overridable). Overnight Night Shift scheduling is not implemented.
+Predicted calls = `len(council) * num_rounds + 2` (moderator + chair). `roundtable_max_calls_per_run` (default 14) fails fast **before** any invocation if predicted > budget. The run record stores `call_accounting`: predicted/attempted/failed counts. These are CLI invocations, **not** provider quota units. Unavailable quota is recorded as `unknown`, never `0`. When any `agentcli:` seat is present, `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2; overridable only via that setting, not the per-run argument). A setting of `0` serializes (minimum 1); it is not a lockout. Overnight Night Shift scheduling is not implemented.
 
 `roundtable:fast` is 1 round (4 seats → 6 predicted calls) and is the recommended casual path.
 

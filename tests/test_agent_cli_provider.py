@@ -409,6 +409,7 @@ async def test_grok_query_uses_hermetic_prompt_file(provider):
     assert "--no-subagents" in argv
     assert "--no-memory" in argv
     assert "--disable-web-search" in argv
+    assert "--disallowed-tools" not in argv
     assert spawn.await_args.kwargs["stdin"] is asyncio.subprocess.DEVNULL
 
 
@@ -572,6 +573,33 @@ async def test_claude_binary_pin_does_not_block_grok(provider, guarded_launcher)
 
 
 @pytest.mark.asyncio
+async def test_raw_grok_binary_pin_still_uses_canonical(provider):
+    proc = _FakeProcess(stdout=json.dumps({"text": "canonical"}).encode())
+    with (
+        patch(
+            "backend.providers.agent_cli.get_settings",
+            return_value=_enabled_settings("/usr/bin/grok"),
+        ),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query("agentcli:grok", [{"role": "user", "content": "hi"}])
+    assert result["error"] is False
+    assert Path(spawn.await_args.args[0]).name == "grok-subscription"
+
+
+def test_codex_typeless_item_is_not_content():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = "\n".join(
+        [
+            json.dumps({"type": "item.completed", "item": {"text": "tool wrapper"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "real"}}),
+        ]
+    )
+    assert _interpret_codex_stream(0, stream, "") == {"content": "real", "error": False}
+
+
+@pytest.mark.asyncio
 async def test_budget_zero_fails_fast(mock_query_model, mock_settings, tmp_path, monkeypatch):
     from backend.roundtable import AgentConfig, run_roundtable
 
@@ -585,7 +613,7 @@ async def test_budget_zero_fails_fast(mock_query_model, mock_settings, tmp_path,
         patch("backend.roundtable.query_model", mock_query_model),
         patch("backend.roundtable.get_settings", return_value=mock_settings),
     ):
-        types = []
+        events = []
         async for event in run_roundtable(
             conversation_id="budget-0",
             question="q",
@@ -594,6 +622,9 @@ async def test_budget_zero_fails_fast(mock_query_model, mock_settings, tmp_path,
             chair_model="mock:chair",
             num_rounds=1,
         ):
-            types.append(event["type"])
-    assert "roundtable_budget_exceeded" in types
+            events.append(event)
+    assert "roundtable_budget_exceeded" in {e["type"] for e in events}
     assert mock_query_model.await_count == 0
+    exceeded = next(e for e in events if e["type"] == "roundtable_budget_exceeded")
+    assert exceeded["quota_units"] == "unknown"
+    assert exceeded["run"]["call_accounting"]["attempted_calls"] == 0

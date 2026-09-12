@@ -229,3 +229,83 @@ async def test_subscription_parallelism_bounds_inflight(mock_settings, tmp_path,
             pass
     assert peak == 2
     assert current == 0
+
+
+@pytest.mark.asyncio
+async def test_subscription_parallelism_zero_serializes(mock_settings, tmp_path, monkeypatch):
+    monkeypatch.setenv("SADB_DATA_DIR", str(tmp_path / "sadb"))
+    mock_settings.roundtable_max_calls_per_run = 20
+    mock_settings.roundtable_subscription_max_parallel = 0
+    agents = [
+        AgentConfig(model="agentcli:claude", role="builder", label="Builder"),
+        AgentConfig(model="agentcli:grok", role="skeptic", label="Skeptic"),
+        AgentConfig(model="agentcli:codex", role="contrarian", label="Contrarian"),
+    ]
+    current = 0
+    peak = 0
+    lock = asyncio.Lock()
+
+    async def gated(model, messages, timeout=120.0, temperature=0.7):
+        nonlocal current, peak
+        async with lock:
+            current += 1
+            peak = max(peak, current)
+        await asyncio.sleep(0.05)
+        async with lock:
+            current -= 1
+        return {"content": f"ok {model}", "error": False}
+
+    with (
+        patch("backend.roundtable.query_model", gated),
+        patch("backend.roundtable.get_settings", return_value=mock_settings),
+    ):
+        async for _event in run_roundtable(
+            conversation_id="budget-6",
+            question="q",
+            agents=agents,
+            moderator_model="agentcli:claude",
+            chair_model="agentcli:claude",
+            num_rounds=1,
+            max_parallel=8,
+        ):
+            pass
+    assert peak == 1
+    assert current == 0
+
+
+@pytest.mark.asyncio
+async def test_peer_failure_does_not_mark_siblings_cancelled(mock_settings, tmp_path, monkeypatch):
+    monkeypatch.setenv("SADB_DATA_DIR", str(tmp_path / "sadb"))
+    mock_settings.roundtable_max_calls_per_run = 20
+    agents = [
+        AgentConfig(model="mock:builder", role="builder", label="Builder"),
+        AgentConfig(model="mock:skeptic", role="skeptic", label="Skeptic"),
+    ]
+
+    async def mixed(model, messages, timeout=120.0, temperature=0.7):
+        if model == "mock:skeptic":
+            return {"content": "", "error": True, "error_message": "peer boom"}
+        return {"content": f"ok {model}", "error": False}
+
+    with (
+        patch("backend.roundtable.query_model", mixed),
+        patch("backend.roundtable.get_settings", return_value=mock_settings),
+    ):
+        events = []
+        async for event in run_roundtable(
+            conversation_id="budget-7",
+            question="q",
+            agents=agents,
+            moderator_model="mock:moderator",
+            chair_model="mock:chair",
+            num_rounds=1,
+            max_parallel=2,
+        ):
+            events.append(event)
+    complete = next(e for e in events if e["type"] == "chair_complete")
+    accounting = complete["run"]["call_accounting"]
+    failed_models = {item["model"] for item in accounting["attempts"] if item["failed"]}
+    ok_models = {item["model"] for item in accounting["attempts"] if not item["failed"]}
+    assert "mock:skeptic" in failed_models
+    assert "mock:builder" in ok_models
+    assert accounting["quota_units"] == "unknown"

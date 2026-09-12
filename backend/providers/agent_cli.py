@@ -91,6 +91,8 @@ class AgentCLIProvider(LLMProvider):
     async def get_models(self) -> list[dict[str, Any]]:
         if not get_settings().enabled_providers.get("agentcli", False):
             return []
+        # is_free is not quota. Claude keeps the WOR-397 listing; grok/codex
+        # are subscription seats whose quota units stay unknown, never zero.
         return [
             {"id": "agentcli:claude", "name": "Claude Code [agentcli]", "provider": "AgentCLI", "is_free": True},
             {"id": "agentcli:grok", "name": "Grok Build [agentcli]", "provider": "AgentCLI", "is_free": False},
@@ -135,8 +137,9 @@ def _resolve_launcher(seat: str, configured: str | None) -> str:
     launcher = root / "scripts" / "agent_launch" / name
     if configured:
         configured_path = Path(configured).expanduser().resolve()
-        # A WOR-397 pin to claude-subscription must not disable grok/codex.
-        # An override is honored only when it is exactly this seat's launcher.
+        # Spawn is always the canonical launcher for this seat. A WOR-397 pin to
+        # claude-subscription must not disable grok/codex; a mismatch raises for
+        # Claude and is ignored for the other seats.
         if configured_path != launcher.resolve():
             if seat == "claude":
                 raise ValueError("Only the canonical C010 guarded subscription launcher is permitted")
@@ -345,7 +348,7 @@ def _codex_event_text(event: dict[str, Any]) -> str:
     item = event.get("item")
     if isinstance(item, dict):
         item_type = item.get("type") or item.get("item_type")
-        if item_type in {"agent_message", "message", None}:
+        if item_type in {"agent_message", "message"}:
             extracted = _stringify_content(item.get("text")) or _stringify_content(item.get("content"))
             if extracted:
                 return extracted
