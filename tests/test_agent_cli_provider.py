@@ -329,3 +329,16 @@ async def test_cleanup_signals_group_after_launcher_exits():
     with patch("backend.providers.agent_cli.os.killpg") as killpg:
         await _kill(proc)
     killpg.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'launcher notice\n{"type":"result","is_error":false,"result":"council ok","usage":{"input_tokens":1}}',
+        '[{"type":"system","subtype":"init"},{"type":"result","is_error":false,"result":"council ok","usage":{"input_tokens":1}}]',
+    ],
+)
+def test_live_cli_envelope_shapes(text):
+    from backend.providers.agent_cli import _interpret_cli_result
+
+    assert _interpret_cli_result(0, text, "") == {"content": "council ok", "error": False}

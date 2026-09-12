@@ -238,25 +238,32 @@ def _looks_like_auth_failure(combined_lower: str) -> bool:
 
 
 def _parse_json_envelope(stdout: str) -> dict[str, Any] | None:
+    # Current Claude JSON may be an event array. Older versions emit a single
+    # envelope, sometimes after launcher notices. Decode whole values so nested
+    # usage metadata cannot become a false starting brace.
+    decoder = json.JSONDecoder()
     text = stdout.strip()
-    if not text:
-        return None
-    try:
-        data = json.loads(text)
-        return data if isinstance(data, dict) else None
-    except json.JSONDecodeError:
-        pass
-
-    # Claude sometimes emits logs before the JSON object. Take the last object.
-    start = text.rfind("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start : end + 1])
-        return data if isinstance(data, dict) else None
-    except json.JSONDecodeError:
-        return None
+    candidates: list[dict[str, Any]] = []
+    offset = 0
+    while offset < len(text):
+        starts = [i for i in (text.find("{", offset), text.find("[", offset)) if i >= 0]
+        if not starts:
+            break
+        start = min(starts)
+        try:
+            data, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            offset = start + 1
+            continue
+        offset = end
+        if isinstance(data, dict):
+            candidates.append(data)
+        elif isinstance(data, list):
+            candidates.extend(item for item in data if isinstance(item, dict))
+    results = [item for item in candidates if item.get("type") == "result"]
+    if results:
+        return results[-1]
+    return candidates[-1] if candidates else None
 
 
 def _extract_content(payload: dict[str, Any]) -> str:

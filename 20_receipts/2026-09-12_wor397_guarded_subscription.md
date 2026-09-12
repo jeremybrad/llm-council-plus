@@ -9,3 +9,5 @@ Evidence: two new tests failed against original implementation and pass after re
 Changed implementation: backend/providers/agent_cli.py, backend/settings.py, tests/test_agent_cli_provider.py, CLAUDE.md.
 
 Independent review round1 F1-F3 confirmed: surviving descendant cleanup after parent exit, false auth classification of successful prose, disabled direct model discovery. Three regressions reproduced red then repaired. Full offline suite326 passes; live process-group synthetic test and re-review follow.
+
+Round2 F4 and Mac live synthetic check exposed JSON nested metadata/log-prefix and current Claude event-array envelope rejection. Both shapes reproduced with synthetic tests before repair; parser now decodes whole JSON values and selects terminal result events.328 offline tests pass. The live attempt was through guarded authenticated claude.ai/max subscription, no metered fallback.
