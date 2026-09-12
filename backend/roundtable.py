@@ -646,11 +646,12 @@ async def run_roundtable(
     subscription_parallel = int(
         getattr(settings, "roundtable_subscription_max_parallel", DEFAULT_SUBSCRIPTION_MAX_PARALLEL)
     )
-    # 0 is a call-budget lockout, not a parallelism lockout (Semaphore(0) deadlocks).
+    # Parallelism 0/negative deadlocks Semaphore; call-budget 0 is a different lockout.
     subscription_parallel = max(1, subscription_parallel)
     seat_models = [a.model for a in agents] + [moderator_model, chair_model]
     if uses_subscription_seat(seat_models):
         max_parallel = min(max_parallel, subscription_parallel)
+    max_parallel = max(1, max_parallel)
     accountant = CallAccountant(predicted, budget)
     accountant_token = _call_accountant.set(accountant)
     run.call_accounting = accountant.snapshot()

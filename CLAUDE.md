@@ -349,7 +349,7 @@ response = client.chat.completions.create(
 )
 ```
 
-`timeout_seconds` is live. `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2) when any `agentcli:` seat is in the run. Predicted calls above `roundtable_max_calls_per_run` fail before the first invocation. `0` is a real lockout, not a missing default.
+`timeout_seconds` is live. `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2) when any `agentcli:` seat is in the run. Predicted calls above `roundtable_max_calls_per_run` fail before the first invocation. A call-budget of `0` is a real lockout, not a missing default. Parallelism floors at 1.
 
 ### Streaming Progress
 
@@ -491,7 +491,7 @@ Seats resolve only C010 `scripts/agent_launch/{claude,grok,codex}-subscription` 
 
 ### Roundtable call budget (WOR-402)
 
-Predicted calls = `len(council) * num_rounds + 2` (moderator + chair). `roundtable_max_calls_per_run` (default 14) fails fast **before** any invocation if predicted > budget. The run record stores `call_accounting`: predicted/attempted/failed counts. These are CLI invocations, **not** provider quota units. Unavailable quota is recorded as `unknown`, never `0`. When any `agentcli:` seat is present, `max_parallel` is capped at `roundtable_subscription_max_parallel` (default 2; overridable only via that setting, not the per-run argument). A setting of `0` serializes (minimum 1); it is not a lockout. Overnight Night Shift scheduling is not implemented.
+Predicted calls = `len(council) * num_rounds + 2` (moderator + chair). `roundtable_max_calls_per_run` (default 14) fails fast **before** any invocation if predicted > budget. The run record stores `call_accounting`: predicted/attempted/failed counts. These are CLI invocations, **not** provider quota units. Unavailable quota is recorded as `unknown`, never `0`. When any `agentcli:` seat is present, `roundtable_subscription_max_parallel` (default 2) is a ceiling: the per-run argument can only lower it. Both the setting and the per-run value floor at 1 (serialize); neither is a lockout. Overnight Night Shift scheduling is not implemented.
 
 `roundtable:fast` is 1 round (4 seats → 6 predicted calls) and is the recommended casual path.
 

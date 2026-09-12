@@ -587,6 +587,22 @@ async def test_raw_grok_binary_pin_still_uses_canonical(provider):
     assert Path(spawn.await_args.args[0]).name == "grok-subscription"
 
 
+@pytest.mark.asyncio
+async def test_raw_codex_binary_pin_still_uses_canonical(provider):
+    stream = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "canonical"}})
+    proc = _FakeProcess(stdout=stream.encode())
+    with (
+        patch(
+            "backend.providers.agent_cli.get_settings",
+            return_value=_enabled_settings("/usr/bin/codex"),
+        ),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query("agentcli:codex", [{"role": "user", "content": "hi"}])
+    assert result["error"] is False
+    assert Path(spawn.await_args.args[0]).name == "codex-subscription"
+
+
 def test_codex_typeless_item_is_not_content():
     from backend.providers.agent_cli import _interpret_codex_stream
 
@@ -597,6 +613,15 @@ def test_codex_typeless_item_is_not_content():
         ]
     )
     assert _interpret_codex_stream(0, stream, "") == {"content": "real", "error": False}
+
+
+def test_codex_only_typeless_items_are_empty():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = json.dumps({"type": "item.completed", "item": {"text": "tool wrapper"}})
+    result = _interpret_codex_stream(0, stream, "")
+    assert result["error"] is True
+    assert "empty content" in result["error_message"]
 
 
 @pytest.mark.asyncio
