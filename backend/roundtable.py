@@ -159,14 +159,23 @@ class CallAccountant:
         return len(self.attempts) >= self.budget
 
     def begin(self, model: str) -> int:
-        self.attempts.append({"model": model, "failed": False, "error_message": None})
+        self.attempts.append({"model": model, "failed": False, "error_message": None, "open": True})
         return len(self.attempts) - 1
 
     def finish(self, index: int, result: dict[str, Any] | None = None, *, failed: bool = False) -> None:
         item = self.attempts[index]
+        item["open"] = False
         item["failed"] = failed or bool(result and result.get("error"))
         if item["failed"]:
             item["error_message"] = (result or {}).get("error_message") or item["error_message"]
+
+    def close_open(self, *, failed: bool = True) -> None:
+        for item in self.attempts:
+            if item.get("open"):
+                item["open"] = False
+                item["failed"] = failed
+                if failed and not item.get("error_message"):
+                    item["error_message"] = "cancelled"
 
     def snapshot(self) -> dict[str, Any]:
         failed = sum(1 for item in self.attempts if item["failed"])
@@ -179,7 +188,7 @@ class CallAccountant:
                 "Call counts are CLI/model invocations. Provider quota units are "
                 "unavailable to this process and must not be treated as zero."
             ),
-            "attempts": list(self.attempts),
+            "attempts": [{k: v for k, v in item.items() if k != "open"} for item in self.attempts],
         }
 
 
@@ -552,6 +561,8 @@ async def run_round_parallel(
         for t in tasks:
             if not t.done():
                 t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
     round_result.completed_at = datetime.utcnow().isoformat()
@@ -917,6 +928,7 @@ async def run_roundtable(
         yield {"type": "chair_complete", "chair_final": run.chair_final, "run": run.to_dict()}
 
     except asyncio.CancelledError:
+        accountant.close_open(failed=True)
         run.status = "aborted"
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()

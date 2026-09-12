@@ -115,7 +115,8 @@ class AgentCLIProvider(LLMProvider):
 
 def _seat_name(model_id: str) -> str:
     rest = model_id.split(":", 1)[-1] if ":" in model_id else model_id
-    # Refuse unverified model suffixes such as agentcli:codex:o3.
+    # Suffixes such as agentcli:codex:o3 become "codex:o3" here; query() refuses
+    # anything outside _SEAT_LAUNCHERS before spawn.
     return rest.strip()
 
 

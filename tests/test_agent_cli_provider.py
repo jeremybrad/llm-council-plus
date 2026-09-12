@@ -459,6 +459,19 @@ async def test_grok_timeout_cancels(provider):
 
 
 @pytest.mark.asyncio
+async def test_codex_timeout_cancels(provider):
+    proc = _FakeProcess(hang=True)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:codex", [{"role": "user", "content": "hi"}], timeout=0.05)
+    assert result["error"] is True
+    assert "timed out" in result["error_message"]
+    assert proc.killed is True
+
+
+@pytest.mark.asyncio
 async def test_validate_grok_models_banner():
     from backend.providers.agent_cli import _validate_grok
 
@@ -513,6 +526,34 @@ def test_codex_nested_content_array():
         }
     )
     assert _interpret_codex_stream(0, stream, "") == {"content": "nested ok", "error": False}
+
+
+def test_codex_last_wins_multiple_agent_messages():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = "\n".join(
+        [
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "first"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "last"}}),
+        ]
+    )
+    assert _interpret_codex_stream(0, stream, "") == {"content": "last", "error": False}
+
+
+def test_codex_nonzero_returncode_with_partial_text():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "partial"}})
+    result = _interpret_codex_stream(1, stream, "boom")
+    assert result["error"] is True
+    assert "exited 1" in result["error_message"]
+
+
+def test_grok_json_after_banner_prefix():
+    from backend.providers.agent_cli import _interpret_grok_result
+
+    payload = "You are logged in with grok.com.\n" + json.dumps({"text": "after banner"})
+    assert _interpret_grok_result(0, payload, "") == {"content": "after banner", "error": False}
 
 
 @pytest.mark.asyncio

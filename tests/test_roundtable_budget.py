@@ -154,6 +154,7 @@ async def test_cancellation_records_partial_attempts(mock_settings, tmp_path, mo
     accounting = aborted["run"]["call_accounting"]
     assert accounting["attempted_calls"] >= 1
     assert accounting["attempted_calls"] < accounting["predicted_calls"]
+    assert accounting["failed_calls"] >= 1
     assert accounting["quota_units"] == "unknown"
 
 
@@ -186,3 +187,45 @@ async def test_subscription_parallelism_capped(mock_query_model, mock_settings, 
                 break
     assert init is not None
     assert init["max_parallel"] == 2
+
+
+@pytest.mark.asyncio
+async def test_subscription_parallelism_bounds_inflight(mock_settings, tmp_path, monkeypatch):
+    monkeypatch.setenv("SADB_DATA_DIR", str(tmp_path / "sadb"))
+    mock_settings.roundtable_max_calls_per_run = 20
+    mock_settings.roundtable_subscription_max_parallel = 2
+    agents = [
+        AgentConfig(model="agentcli:claude", role="builder", label="Builder"),
+        AgentConfig(model="agentcli:grok", role="skeptic", label="Skeptic"),
+        AgentConfig(model="agentcli:codex", role="contrarian", label="Contrarian"),
+    ]
+    current = 0
+    peak = 0
+    lock = asyncio.Lock()
+
+    async def gated(model, messages, timeout=120.0, temperature=0.7):
+        nonlocal current, peak
+        async with lock:
+            current += 1
+            peak = max(peak, current)
+        await asyncio.sleep(0.05)
+        async with lock:
+            current -= 1
+        return {"content": f"ok {model}", "error": False}
+
+    with (
+        patch("backend.roundtable.query_model", gated),
+        patch("backend.roundtable.get_settings", return_value=mock_settings),
+    ):
+        async for _event in run_roundtable(
+            conversation_id="budget-5",
+            question="q",
+            agents=agents,
+            moderator_model="agentcli:claude",
+            chair_model="agentcli:claude",
+            num_rounds=1,
+            max_parallel=8,
+        ):
+            pass
+    assert peak == 2
+    assert current == 0
