@@ -169,7 +169,8 @@ async def test_disabled_short_circuits_without_spawn(provider):
 
 @pytest.mark.asyncio
 async def test_get_models_static_list(provider):
-    models = await provider.get_models()
+    with patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()):
+        models = await provider.get_models()
     assert models[0]["id"] == "agentcli:claude"
     assert models[0]["provider"] == "AgentCLI"
 
@@ -229,6 +230,7 @@ def test_api_models_appends_agentcli_when_enabled():
     with (
         patch("backend.openrouter.fetch_models", AsyncMock(return_value=[{"id": "openai/gpt-4o", "name": "GPT-4o"}])),
         patch("backend.main.get_settings", return_value=settings),
+        patch("backend.providers.agent_cli.get_settings", return_value=settings),
     ):
         response = TestClient(app).get("/api/models")
 
@@ -250,6 +252,7 @@ def test_api_models_omits_agentcli_when_disabled():
     with (
         patch("backend.openrouter.fetch_models", AsyncMock(return_value=[{"id": "openai/gpt-4o", "name": "GPT-4o"}])),
         patch("backend.main.get_settings", return_value=settings),
+        patch("backend.providers.agent_cli.get_settings", return_value=settings),
     ):
         response = TestClient(app).get("/api/models")
 
@@ -300,3 +303,29 @@ async def test_validate_key_does_not_infer(provider):
     assert result["success"] is True
     assert spawn.await_args.args[-2:] == ("auth", "status")
     assert proc.stdin_payload is None
+
+
+def test_successful_authentication_discussion_is_content():
+    from backend.providers.agent_cli import _interpret_cli_result
+
+    assert _interpret_cli_result(0, _result_json("Use authentication for this endpoint.").decode(), "") == {
+        "content": "Use authentication for this endpoint.",
+        "error": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_disabled_provider_advertises_no_models(provider):
+    with patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings(enabled=False)):
+        assert await provider.get_models() == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_signals_group_after_launcher_exits():
+    from backend.providers.agent_cli import _kill
+
+    proc = _FakeProcess(returncode=0)
+    proc.pid = 987654
+    with patch("backend.providers.agent_cli.os.killpg") as killpg:
+        await _kill(proc)
+    killpg.assert_called_once()

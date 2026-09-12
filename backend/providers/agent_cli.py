@@ -74,6 +74,8 @@ class AgentCLIProvider(LLMProvider):
         )
 
     async def get_models(self) -> list[dict[str, Any]]:
+        if not get_settings().enabled_providers.get("agentcli", False):
+            return []
         return [
             {
                 "id": _DEFAULT_MODEL_ID,
@@ -204,7 +206,7 @@ async def _invoke_claude(*, binary: str, prompt: str, timeout: float) -> dict[st
 
 def _interpret_cli_result(returncode: int, stdout: str, stderr: str) -> dict[str, Any]:
     combined = f"{stdout}\n{stderr}".lower()
-    if _looks_like_auth_failure(combined):
+    if returncode != 0 and _looks_like_auth_failure(combined):
         return {"error": True, "error_message": f"agentcli auth failure: {_brief(stderr or stdout)}"}
 
     payload = _parse_json_envelope(stdout)
@@ -290,8 +292,6 @@ def _brief(text: str, limit: int = 300) -> str:
 
 
 async def _kill(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
-        return
     try:
         if getattr(proc, "pid", None):
             os.killpg(proc.pid, signal.SIGKILL)
