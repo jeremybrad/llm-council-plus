@@ -264,7 +264,7 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
             # Stream progress as content deltas
             if event_type == "roundtable_budget_exceeded":
                 progress_msg = (
-                    f"Error: predicted {event.get('predicted_calls')} model calls exceed "
+                    f"ERROR: predicted {event.get('predicted_calls')} model calls exceed "
                     f"roundtable_max_calls_per_run={event.get('max_calls_per_run')}. "
                     "Quota units are unknown, not zero."
                 )

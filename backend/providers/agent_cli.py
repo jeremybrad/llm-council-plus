@@ -93,12 +93,12 @@ class AgentCLIProvider(LLMProvider):
             return []
         return [
             {"id": "agentcli:claude", "name": "Claude Code [agentcli]", "provider": "AgentCLI", "is_free": True},
-            {"id": "agentcli:grok", "name": "Grok Build [agentcli]", "provider": "AgentCLI", "is_free": True},
+            {"id": "agentcli:grok", "name": "Grok Build [agentcli]", "provider": "AgentCLI", "is_free": False},
             {
                 "id": "agentcli:codex",
                 "name": "Codex CLI default [agentcli]",
                 "provider": "AgentCLI",
-                "is_free": True,
+                "is_free": False,
             },
         ]
 
@@ -134,8 +134,12 @@ def _resolve_launcher(seat: str, configured: str | None) -> str:
     launcher = root / "scripts" / "agent_launch" / name
     if configured:
         configured_path = Path(configured).expanduser().resolve()
+        # A WOR-397 pin to claude-subscription must not disable grok/codex.
+        # An override is honored only when it is exactly this seat's launcher.
         if configured_path != launcher.resolve():
-            raise ValueError("Only the canonical C010 guarded subscription launcher is permitted")
+            if seat == "claude":
+                raise ValueError("Only the canonical C010 guarded subscription launcher is permitted")
+            configured = None
     if not launcher.is_file():
         raise ValueError(f"Canonical guarded agentcli launcher not found: {name}")
     return str(launcher)
@@ -189,8 +193,6 @@ async def _invoke_grok(*, binary: str, prompt: str, timeout: float) -> dict[str,
         "--disable-web-search",
         "--no-subagents",
         "--no-memory",
-        "--disallowed-tools",
-        _DISALLOWED_TOOLS,
         "--cwd",
         scratch,
     ]
@@ -342,17 +344,31 @@ def _codex_event_text(event: dict[str, Any]) -> str:
     item = event.get("item")
     if isinstance(item, dict):
         item_type = item.get("type") or item.get("item_type")
-        if item_type in {"agent_message", "message"}:
-            for key in ("text", "content"):
-                value = item.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value
+        if item_type in {"agent_message", "message", None}:
+            extracted = _stringify_content(item.get("text")) or _stringify_content(item.get("content"))
+            if extracted:
+                return extracted
     event_type = event.get("type")
-    if event_type in {"agent_message", "item.completed"}:
-        for key in ("text", "content"):
-            value = event.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
+    if event_type in {"agent_message", "item.completed", "message"}:
+        extracted = _stringify_content(event.get("text")) or _stringify_content(event.get("content"))
+        if extracted:
+            return extracted
+    return ""
+
+
+def _stringify_content(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, list):
+        chunks: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str) and text.strip():
+                    chunks.append(text)
+        return "\n".join(chunks)
     return ""
 
 
@@ -485,7 +501,7 @@ async def _validate_grok(binary: str) -> dict[str, str | bool]:
         await _kill(proc)
         raise
     text = (stdout + stderr).decode("utf-8", errors="replace")
-    ok = proc.returncode == 0 and "logged in with grok.com" in text.lower()
+    ok = proc.returncode == 0 and _positive_login_banner(text, "logged in with grok.com")
     return {
         "seat": "grok",
         "success": ok,
@@ -514,12 +530,20 @@ async def _validate_codex(binary: str) -> dict[str, str | bool]:
         await _kill(proc)
         raise
     text = (stdout + stderr).decode("utf-8", errors="replace")
-    ok = proc.returncode == 0 and "logged in using chatgpt" in text.lower()
+    ok = proc.returncode == 0 and _positive_login_banner(text, "logged in using chatgpt")
     return {
         "seat": "codex",
         "success": ok,
         "message": "Codex subscription authenticated" if ok else "Subscription authentication unverified",
     }
+
+
+def _positive_login_banner(text: str, needle: str) -> bool:
+    """Require the positive banner; reject 'Not logged in …' supersets."""
+    lower = text.lower()
+    if "not logged in" in lower or f"not {needle}" in lower:
+        return False
+    return needle in lower
 
 
 def _brief(text: str, limit: int = 300) -> str:

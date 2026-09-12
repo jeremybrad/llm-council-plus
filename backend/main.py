@@ -328,7 +328,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         elif event_type == "roundtable_budget_exceeded":
                             run_data = event.get("run")
                             aborted = True
-                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units')}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
 
                         elif event_type == "roundtable_aborted":
                             run_data = event.get("run")

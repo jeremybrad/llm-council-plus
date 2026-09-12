@@ -478,3 +478,81 @@ async def test_validate_codex_login_status():
         result = await _validate_codex("/tmp/codex-subscription")
     assert result["success"] is True
     assert spawn.await_args.args[-2:] == ("login", "status")
+
+
+@pytest.mark.asyncio
+async def test_validate_grok_rejects_not_logged_in_banner():
+    from backend.providers.agent_cli import _validate_grok
+
+    proc = _FakeProcess(stdout=b"Not logged in with grok.com.\n", returncode=0)
+    with patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        result = await _validate_grok("/tmp/grok-subscription")
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_validate_codex_rejects_not_logged_in_banner():
+    from backend.providers.agent_cli import _validate_codex
+
+    proc = _FakeProcess(stdout=b"Not logged in using ChatGPT\n", returncode=0)
+    with patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        result = await _validate_codex("/tmp/codex-subscription")
+    assert result["success"] is False
+
+
+def test_codex_nested_content_array():
+    from backend.providers.agent_cli import _interpret_codex_stream
+
+    stream = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "content": [{"type": "text", "text": "nested ok"}],
+            },
+        }
+    )
+    assert _interpret_codex_stream(0, stream, "") == {"content": "nested ok", "error": False}
+
+
+@pytest.mark.asyncio
+async def test_claude_binary_pin_does_not_block_grok(provider, guarded_launcher):
+    proc = _FakeProcess(stdout=json.dumps({"text": "grok despite claude pin"}).encode())
+    with (
+        patch(
+            "backend.providers.agent_cli.get_settings",
+            return_value=_enabled_settings(str(guarded_launcher)),
+        ),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query("agentcli:grok", [{"role": "user", "content": "hi"}])
+    assert result["error"] is False
+    assert Path(spawn.await_args.args[0]).name == "grok-subscription"
+
+
+@pytest.mark.asyncio
+async def test_budget_zero_fails_fast(mock_query_model, mock_settings, tmp_path, monkeypatch):
+    from backend.roundtable import AgentConfig, run_roundtable
+
+    monkeypatch.setenv("SADB_DATA_DIR", str(tmp_path / "sadb"))
+    mock_settings.roundtable_max_calls_per_run = 0
+    agents = [
+        AgentConfig(model="mock:builder", role="builder", label="Builder"),
+        AgentConfig(model="mock:skeptic", role="skeptic", label="Skeptic"),
+    ]
+    with (
+        patch("backend.roundtable.query_model", mock_query_model),
+        patch("backend.roundtable.get_settings", return_value=mock_settings),
+    ):
+        types = []
+        async for event in run_roundtable(
+            conversation_id="budget-0",
+            question="q",
+            agents=agents,
+            moderator_model="mock:moderator",
+            chair_model="mock:chair",
+            num_rounds=1,
+        ):
+            types.append(event["type"])
+    assert "roundtable_budget_exceeded" in types
+    assert mock_query_model.await_count == 0

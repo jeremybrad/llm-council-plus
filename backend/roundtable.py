@@ -140,8 +140,9 @@ def uses_subscription_seat(models: list[str]) -> bool:
 class CallAccountant:
     """Record attempted model invocations, including failures. Not quota units."""
 
-    def __init__(self, predicted: int) -> None:
+    def __init__(self, predicted: int, budget: int) -> None:
         self.predicted = predicted
+        self.budget = budget
         self.attempts: list[dict[str, Any]] = []
 
     def observe(self, model: str, result: dict[str, Any] | None = None, *, failed: bool = False) -> None:
@@ -153,6 +154,9 @@ class CallAccountant:
                 "error_message": (result or {}).get("error_message") if error else None,
             }
         )
+
+    def at_budget(self) -> bool:
+        return len(self.attempts) >= self.budget
 
     def begin(self, model: str) -> int:
         self.attempts.append({"model": model, "failed": False, "error_message": None})
@@ -406,6 +410,15 @@ async def query_agent(
 
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     accountant = _call_accountant.get()
+    if accountant is not None and accountant.at_budget():
+        return RoundResponse(
+            agent_label=agent.label,
+            model=agent.model,
+            role=ROLES.get(agent.role, agent.role),
+            content="",
+            error=f"call budget exhausted ({accountant.budget})",
+            duration_ms=0,
+        )
     attempt = accountant.begin(agent.model) if accountant is not None else None
 
     try:
@@ -616,17 +629,14 @@ async def run_roundtable(
     settings = get_settings()
     effective_timeout = timeout_seconds if timeout_seconds is not None else settings.roundtable_timeout_seconds
     predicted = predict_roundtable_calls(len(agents), num_rounds)
-    budget = int(
-        getattr(settings, "roundtable_max_calls_per_run", DEFAULT_MAX_CALLS_PER_RUN) or DEFAULT_MAX_CALLS_PER_RUN
-    )
+    budget = int(getattr(settings, "roundtable_max_calls_per_run", DEFAULT_MAX_CALLS_PER_RUN))
     subscription_parallel = int(
         getattr(settings, "roundtable_subscription_max_parallel", DEFAULT_SUBSCRIPTION_MAX_PARALLEL)
-        or DEFAULT_SUBSCRIPTION_MAX_PARALLEL
     )
     seat_models = [a.model for a in agents] + [moderator_model, chair_model]
     if uses_subscription_seat(seat_models):
         max_parallel = min(max_parallel, subscription_parallel)
-    accountant = CallAccountant(predicted)
+    accountant = CallAccountant(predicted, budget)
     accountant_token = _call_accountant.set(accountant)
     run.call_accounting = accountant.snapshot()
 
@@ -814,13 +824,14 @@ async def run_roundtable(
             )
 
         try:
+            mod_attempt = accountant.begin(moderator_model)
             moderator_response = await query_model(
                 moderator_model,
                 moderator_messages,
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
-            accountant.observe(moderator_model, moderator_response)
+            accountant.finish(mod_attempt, moderator_response)
 
             moderator_content = moderator_response.get("content", "")
             if not isinstance(moderator_content, str):
@@ -833,7 +844,10 @@ async def run_roundtable(
             }
 
         except Exception as e:
-            accountant.observe(moderator_model, failed=True)
+            if accountant.attempts and accountant.attempts[-1]["model"] == moderator_model:
+                accountant.finish(len(accountant.attempts) - 1, failed=True)
+            else:
+                accountant.observe(moderator_model, failed=True)
             logger.error(f"Moderator synthesis failed: {e}")
             run.moderator_summary = {"model": moderator_model, "content": "", "error": True, "error_message": str(e)}
 
@@ -869,13 +883,14 @@ async def run_roundtable(
             )
 
         try:
+            chair_attempt = accountant.begin(chair_model)
             chair_response = await query_model(
                 chair_model,
                 chair_messages,
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
-            accountant.observe(chair_model, chair_response)
+            accountant.finish(chair_attempt, chair_response)
 
             chair_content = chair_response.get("content", "")
             if not isinstance(chair_content, str):
@@ -888,7 +903,10 @@ async def run_roundtable(
             }
 
         except Exception as e:
-            accountant.observe(chair_model, failed=True)
+            if accountant.attempts and accountant.attempts[-1]["model"] == chair_model:
+                accountant.finish(len(accountant.attempts) - 1, failed=True)
+            else:
+                accountant.observe(chair_model, failed=True)
             logger.error(f"Chair synthesis failed: {e}")
             run.chair_final = {"model": chair_model, "content": "", "error": True, "error_message": str(e)}
 
