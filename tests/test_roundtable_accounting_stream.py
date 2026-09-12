@@ -13,7 +13,8 @@ from backend import main, turn_capture
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal", ["chair_complete", "roundtable_aborted", "roundtable_budget_exceeded"])
-async def test_stream_preserves_call_accounting(monkeypatch, terminal):
+@pytest.mark.parametrize("terminal_ledger_present", [True, False])
+async def test_stream_preserves_call_accounting(monkeypatch, terminal, terminal_ledger_present):
     ledger = {
         "predicted_calls": 6,
         "attempted_calls": 4,
@@ -27,7 +28,7 @@ async def test_stream_preserves_call_accounting(monkeypatch, terminal):
         "run_id": "synthetic-run",
         "conversation_id": "synthetic",
         "status": "completed",
-        "call_accounting": ledger,
+        "call_accounting": ledger if terminal_ledger_present else None,
         "chair_final": {},
     }
 
@@ -67,8 +68,8 @@ async def test_stream_preserves_call_accounting(monkeypatch, terminal):
         events.append(json.loads(chunk.removeprefix("data: ").strip()))
     accounting = [e for e in events if e["type"] == "roundtable_accounting"]
     assert accounting[0]["data"]["attempted_calls"] == 0
-    assert accounting[-1]["data"] == ledger
+    assert accounting[-1]["data"] == (ledger if terminal_ledger_present else None)
 
     evidence_dir = os.environ.get("WOR402_STREAM_EVIDENCE_DIR")
     if evidence_dir:
-        Path(evidence_dir, terminal + ".json").write_text(json.dumps(events))
+        Path(evidence_dir, terminal + ("" if terminal_ledger_present else "-missing") + ".json").write_text(json.dumps(events))

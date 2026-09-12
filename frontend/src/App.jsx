@@ -786,7 +786,7 @@ function App() {
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
-                if (!lastMsg || !event.data) return prev;
+                if (!lastMsg) return prev;
                 messages[messages.length - 1] = {
                   ...lastMsg,
                   roundtable: applyRoundtableEvent(lastMsg.roundtable, event)

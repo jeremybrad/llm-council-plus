@@ -21,6 +21,15 @@ try {
   assert.match(html, /4/);
   assert.doesNotMatch(html, /quota usage: 0/i);
   const render = (roundtable) => renderToStaticMarkup(React.createElement(Timeline, { roundtable }));
+  for (const data of [null, [], 'invalid']) {
+    for (const type of ['roundtable_complete', 'roundtable_error']) {
+      let state = { status: 'running', rounds: [], call_accounting: { predicted_calls: 6, attempted_calls: 0, failed_calls: 0 } };
+      state = applyRoundtableEvent(state, { type: 'roundtable_accounting', data });
+      state = applyRoundtableEvent(state, { type, message: 'synthetic failure' });
+      assert.match(render(state), /Attempted: unknown/);
+      assert.match(render(state), /Failed: unknown/);
+    }
+  }
   const blocked = render({ status: 'error', error: 'Predicted call budget exceeded', rounds: [], call_accounting: {
     predicted_calls: 6, attempted_calls: 0, failed_calls: 0, quota_units: 0
   }});
@@ -33,8 +42,8 @@ try {
   assert.doesNotMatch(render({ rounds: [], status: 'completed' }), /Run call counts/);
   assert.equal(render(null), '');
   let state = { status: 'running', rounds: [] };
-  assert.equal(applyRoundtableEvent(state, { type: 'roundtable_accounting', data: null }), state);
-  assert.equal(applyRoundtableEvent(state, { type: 'roundtable_accounting', data: [] }), state);
+  assert.deepEqual(applyRoundtableEvent(state, { type: 'roundtable_accounting', data: null }).call_accounting, {});
+  assert.deepEqual(applyRoundtableEvent(state, { type: 'roundtable_accounting', data: [] }).call_accounting, {});
   const missing = applyRoundtableEvent(state, { type: 'roundtable_complete' });
   assert.doesNotMatch(render(missing), /Run call counts/);
   if (process.env.WOR402_STREAM_EVIDENCE_DIR) {
@@ -47,6 +56,10 @@ try {
       assert.match(streamed, /quota usage: unknown/);
       assert.equal(state.status, terminal === 'chair_complete' ? 'completed' : 'error');
       if (terminal !== 'chair_complete') assert.match(streamed, /role="alert"/);
+      const missingEvents = JSON.parse(readFileSync(`${process.env.WOR402_STREAM_EVIDENCE_DIR}/${terminal}-missing.json`, 'utf8'));
+      const missingState = missingEvents.reduce(applyRoundtableEvent, { status: 'running', rounds: [] });
+      assert.match(render(missingState), /Attempted: unknown/);
+      assert.match(render(missingState), /Failed: unknown/);
     }
   }
   console.log('Synthetic timeline accounting and App event-state fixtures passed');
