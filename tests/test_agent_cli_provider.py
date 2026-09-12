@@ -1,0 +1,262 @@
+"""Mocked subprocess tests for AgentCLIProvider (WOR-397)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from backend.council import PROVIDERS, get_provider_for_model
+from backend.providers.agent_cli import AgentCLIProvider, _flatten_messages
+
+
+def _enabled_settings(binary: str | None = None, enabled: bool = True):
+    return SimpleNamespace(
+        enabled_providers={"agentcli": enabled},
+        agentcli_binary_path=binary,
+    )
+
+
+class _FakeProcess:
+    def __init__(self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0, hang: bool = False):
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = None if hang else returncode
+        self._final_code = returncode
+        self.killed = False
+        self.stdin_payload: bytes | None = None
+
+    async def communicate(self, input: bytes | None = None):
+        self.stdin_payload = input
+        if self.returncode is None:
+            await asyncio.sleep(60)
+        return self._stdout, self._stderr
+
+    def kill(self):
+        self.killed = True
+        self.returncode = self._final_code if self._final_code is not None else -9
+
+    async def wait(self):
+        return self.returncode
+
+
+def _result_json(text: str, is_error: bool = False) -> bytes:
+    payload = {"type": "result", "is_error": is_error, "result": text}
+    return json.dumps(payload).encode("utf-8")
+
+
+@pytest.fixture
+def provider():
+    return AgentCLIProvider()
+
+
+@pytest.mark.asyncio
+async def test_success_parses_json_envelope(provider):
+    proc = _FakeProcess(stdout=_result_json("council ok"), returncode=0)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn,
+    ):
+        result = await provider.query(
+            "agentcli:claude",
+            [
+                {"role": "system", "content": "You are Builder."},
+                {"role": "user", "content": "Propose a plan."},
+            ],
+            timeout=5.0,
+            temperature=0.9,
+        )
+
+    assert result == {"content": "council ok", "error": False}
+    argv = spawn.await_args.args
+    assert argv[0] == "claude"
+    assert "-p" in argv
+    assert argv[argv.index("--output-format") + 1] == "json"
+    assert "--disallowedTools" in argv
+    assert "-p" in argv
+    kwargs = spawn.await_args.kwargs
+    assert kwargs["stdin"] is asyncio.subprocess.PIPE
+    assert kwargs["cwd"]
+    assert proc.stdin_payload == b"You are Builder.\n\nPropose a plan."
+    # CLIs do not accept temperature — it must not appear in argv.
+    assert "0.9" not in argv
+    assert "--temperature" not in argv
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_process(provider):
+    proc = _FakeProcess(hang=True)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}], timeout=0.05)
+
+    assert result["error"] is True
+    assert "timed out" in result["error_message"]
+    assert proc.killed is True
+
+
+@pytest.mark.asyncio
+async def test_cli_missing(provider):
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings("/no/such/claude")),
+        patch(
+            "backend.providers.agent_cli.asyncio.create_subprocess_exec",
+            AsyncMock(side_effect=FileNotFoundError("missing")),
+        ),
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+
+    assert result["error"] is True
+    assert "not found" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_auth_failure(provider):
+    proc = _FakeProcess(stdout=b"", stderr=b"Error: Not logged in. Please run /login", returncode=1)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+
+    assert result["error"] is True
+    assert "auth failure" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_json_parse_failure(provider):
+    proc = _FakeProcess(stdout=b"not-json from claude", returncode=0)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+
+    assert result["error"] is True
+    assert "JSON parse failure" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_short_circuits_without_spawn(provider):
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings(enabled=False)),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec") as spawn,
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+
+    assert result["error"] is True
+    assert "disabled" in result["error_message"]
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_models_static_list(provider):
+    models = await provider.get_models()
+    assert models[0]["id"] == "agentcli:claude"
+    assert models[0]["provider"] == "AgentCLI"
+
+
+def test_prefix_routes_to_agentcli():
+    provider = get_provider_for_model("agentcli:claude")
+    assert provider is PROVIDERS["agentcli"]
+    assert isinstance(provider, AgentCLIProvider)
+
+
+def test_flatten_system_and_user():
+    prompt = _flatten_messages(
+        [
+            {"role": "system", "content": "You are Skeptic."},
+            {"role": "user", "content": "Critique this."},
+        ]
+    )
+    assert prompt == "You are Skeptic.\n\nCritique this."
+
+
+@pytest.mark.asyncio
+async def test_validate_key_reports_missing_binary(provider):
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings("missing-claude")),
+        patch("backend.providers.agent_cli.shutil.which", return_value=None),
+        patch("backend.providers.agent_cli.os.path.isfile", return_value=False),
+    ):
+        result = await provider.validate_key("")
+
+    assert result["success"] is False
+    assert "not found" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_envelope_is_error_true(provider):
+    proc = _FakeProcess(stdout=_result_json("rate limited", is_error=True), returncode=0)
+    with (
+        patch("backend.providers.agent_cli.get_settings", return_value=_enabled_settings()),
+        patch("backend.providers.agent_cli.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)),
+    ):
+        result = await provider.query("agentcli:claude", [{"role": "user", "content": "hi"}])
+
+    assert result["error"] is True
+    assert "rate limited" in result["error_message"]
+
+
+def test_api_models_appends_agentcli_when_enabled():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    settings = SimpleNamespace(
+        enabled_providers={"agentcli": True, "openrouter": True},
+        agentcli_binary_path=None,
+    )
+    with (
+        patch("backend.openrouter.fetch_models", AsyncMock(return_value=[{"id": "openai/gpt-4o", "name": "GPT-4o"}])),
+        patch("backend.main.get_settings", return_value=settings),
+    ):
+        response = TestClient(app).get("/api/models")
+
+    assert response.status_code == 200
+    ids = [m["id"] for m in response.json()["models"]]
+    assert "openai/gpt-4o" in ids
+    assert "agentcli:claude" in ids
+
+
+def test_api_models_omits_agentcli_when_disabled():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    settings = SimpleNamespace(
+        enabled_providers={"agentcli": False, "openrouter": True},
+        agentcli_binary_path=None,
+    )
+    with (
+        patch("backend.openrouter.fetch_models", AsyncMock(return_value=[{"id": "openai/gpt-4o", "name": "GPT-4o"}])),
+        patch("backend.main.get_settings", return_value=settings),
+    ):
+        response = TestClient(app).get("/api/models")
+
+    ids = [m["id"] for m in response.json()["models"]]
+    assert "agentcli:claude" not in ids
+
+
+def test_test_provider_allows_empty_key_for_agentcli():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    with patch(
+        "backend.providers.agent_cli.AgentCLIProvider.validate_key",
+        AsyncMock(return_value={"success": False, "message": "agentcli binary not found: claude"}),
+    ):
+        response = TestClient(app).post(
+            "/api/settings/test-provider",
+            json={"provider_id": "agentcli", "api_key": ""},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert "not found" in response.json()["message"]
