@@ -1,9 +1,83 @@
 """Pytest fixtures for roundtable tests."""
 
+import os
+import socket
+import tempfile
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Test isolation (WOR-1016). Established at conftest import, before any test
+# module imports `backend`, so module-level path constants and SADB root
+# resolution can never point at real operator data, settings or credentials.
+# ---------------------------------------------------------------------------
+ISOLATION_ROOT = Path(tempfile.mkdtemp(prefix="llm-council-tests-")).resolve()
+ISOLATED_SADB_ROOT = ISOLATION_ROOT / "sadb"
+ISOLATED_DATA_DIR = ISOLATION_ROOT / "data"
+os.environ["SADB_DATA_DIR"] = str(ISOLATED_SADB_ROOT)
+os.environ["SADB_CLI_PATH"] = str(ISOLATION_ROOT / "no-sadb-cli")
+for _name in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"):
+    os.environ.pop(_name, None)
+
+
+class NetworkBlockedError(RuntimeError):
+    """Raised when a test tries to open a network connection."""
+
+
+def _blocked(*_args, **_kwargs):
+    raise NetworkBlockedError("network access is blocked in tests (WOR-1016 isolation)")
+
+
+_REAL_CONNECT = socket.socket.connect
+_REAL_CONNECT_EX = socket.socket.connect_ex
+
+
+def _guarded_connect(self, address):
+    if self.family == getattr(socket, "AF_UNIX", None):
+        return _REAL_CONNECT(self, address)
+    _blocked()
+
+
+def _guarded_connect_ex(self, address):
+    if self.family == getattr(socket, "AF_UNIX", None):
+        return _REAL_CONNECT_EX(self, address)
+    _blocked()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_runtime():
+    """Point every backend data path at a disposable root and block network I/O."""
+    import backend.claims as claims
+    import backend.config as config
+    import backend.main as main
+    import backend.roundtable as roundtable
+    import backend.settings as settings
+    import backend.storage as storage
+
+    mp = pytest.MonkeyPatch()
+    conversations = ISOLATED_DATA_DIR / "conversations"
+    mp.setattr(config, "DATA_DIR", str(conversations))
+    mp.setattr(config, "DEBUG_PROMPTS_DIR", str(ISOLATED_DATA_DIR / "debug" / "prompts"))
+    mp.setattr(storage, "DATA_DIR", str(conversations))
+    mp.setattr(storage, "RUNS_DIR", ISOLATED_DATA_DIR / "runs")
+    mp.setattr(settings, "SETTINGS_FILE", ISOLATED_DATA_DIR / "settings.json")
+    mp.setattr(roundtable, "DEBUG_DIR", ISOLATED_DATA_DIR / "debug" / "prompts")
+    mp.setattr(main, "MODE_SESSIONS_DIR", ISOLATED_DATA_DIR / "mode_sessions")
+    claims_dir = ISOLATED_DATA_DIR / "claims"
+    mp.setattr(claims, "DATA_DIR", ISOLATED_DATA_DIR)
+    mp.setattr(claims, "CLAIMS_DIR", claims_dir)
+    mp.setattr(claims, "CLAIMS_FILE", claims_dir / "claims.json")
+    mp.setattr(claims, "LOCK_FILE", claims_dir / "claims.json.lock")
+    mp.setattr(claims, "HISTORY_DIR", claims_dir / "history")
+    mp.setattr(socket.socket, "connect", _guarded_connect)
+    mp.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
+    mp.setattr(socket, "create_connection", _blocked)
+    mp.setattr(socket, "getaddrinfo", _blocked)
+    yield
+    mp.undo()
 
 
 # Mock response generator for deterministic testing

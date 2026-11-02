@@ -75,7 +75,8 @@ class RoundtableRun:
     question: str
     context: str = ""
     constraints: str = ""
-    status: str = "running"  # running, completed, aborted
+    # running, completed, degraded, failed, aborted, budget_exceeded
+    status: str = "running"
     council: list[AgentConfig] = field(default_factory=list)
     rounds: list[RoundResult] = field(default_factory=list)
     moderator_summary: dict[str, Any] | None = None
@@ -83,6 +84,10 @@ class RoundtableRun:
     call_accounting: dict[str, Any] | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: str | None = None
+    requested_rounds: int | None = None  # what the caller asked for (diagnostics)
+    executed_rounds: int | None = None  # what the engine runs (capped at MAX_EXECUTED_ROUNDS)
+    failure_reason: str | None = None  # why the run is not fully completed
+    failed_seats: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -109,6 +114,10 @@ class RoundtableRun:
             "call_accounting": self.call_accounting,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
+            "requested_rounds": self.requested_rounds,
+            "executed_rounds": self.executed_rounds,
+            "failure_reason": self.failure_reason,
+            "failed_seats": list(self.failed_seats),
         }
 
 
@@ -117,6 +126,75 @@ class RoundtableRun:
 DEFAULT_MAX_CALLS_PER_RUN = 14
 DEFAULT_SUBSCRIPTION_MAX_PARALLEL = 2
 QUOTA_UNITS_UNKNOWN = "unknown"
+
+# The engine implements opening, critique and revision. Requests for more rounds are
+# capped here before prediction, and the requested count is kept for diagnostics.
+MAX_EXECUTED_ROUNDS = 3
+
+# Terminal run outcomes. Only runs that produced a chair answer may be captured.
+RUN_STATUSES = ("completed", "degraded", "failed", "aborted", "budget_exceeded")
+CAPTURABLE_RUN_STATUSES = frozenset({"completed", "degraded"})
+
+
+def _failure_text(message: Any, fallback: str) -> str:
+    """Never let a failure carry an empty reason (httpx timeouts stringify to '')."""
+    text = str(message).strip() if message is not None else ""
+    return text or fallback
+
+
+def _seat_succeeded(response: "RoundResponse") -> bool:
+    return not response.error and bool(str(response.content or "").strip())
+
+
+def _synthesis_succeeded(result: dict[str, Any] | None) -> bool:
+    return bool(result) and not result.get("error") and bool(str(result.get("content") or "").strip())
+
+
+def _synthesis_result(model: str, response: Any, role: str) -> dict[str, Any]:
+    """Normalize a moderator/chair provider result, keeping any error reason."""
+    if not isinstance(response, dict):
+        return {"model": model, "content": "", "error": True, "error_message": f"{role} returned a non-dict result"}
+    content = response.get("content", "")
+    if not isinstance(content, str):
+        content = str(content) if content else ""
+    if response.get("error"):
+        return {
+            "model": model,
+            "content": content,
+            "error": True,
+            "error_message": _failure_text(response.get("error_message"), f"{role} provider error (no message)"),
+        }
+    if not content.strip():
+        return {"model": model, "content": "", "error": True, "error_message": f"{role} returned empty content"}
+    return {"model": model, "content": content, "error": False}
+
+
+def _ordered_failed_seats(rounds: list["RoundResult"], seat_order: list[str] | None = None) -> list[str]:
+    """Labels of seats with any failed call, in council order (not completion order)."""
+    failed = {r.agent_label for rr in rounds for r in rr.responses if not _seat_succeeded(r)}
+    order = list(seat_order or []) + sorted(failed - set(seat_order or []))
+    return [label for label in dict.fromkeys(order) if label in failed]
+
+
+def derive_run_outcome(
+    rounds: list["RoundResult"],
+    moderator_summary: dict[str, Any] | None,
+    chair_final: dict[str, Any] | None,
+    seat_order: list[str] | None = None,
+) -> tuple[str, str | None, list[str]]:
+    """Derive (status, failure_reason, failed_seats) from what actually happened."""
+    failed_seats = _ordered_failed_seats(rounds, seat_order)
+    if not _synthesis_succeeded(chair_final):
+        reason = (chair_final or {}).get("error_message") or "no chair answer"
+        return "failed", f"chair failed: {reason}", failed_seats
+    reasons = []
+    if failed_seats:
+        reasons.append("seat failures: " + ", ".join(failed_seats))
+    if not _synthesis_succeeded(moderator_summary):
+        reasons.append("moderator failed: " + str((moderator_summary or {}).get("error_message") or "no summary"))
+    if reasons:
+        return "degraded", "; ".join(reasons), failed_seats
+    return "completed", None, []
 
 
 def predict_roundtable_calls(n_agents: int, n_rounds: int) -> int:
@@ -434,6 +512,20 @@ async def query_agent(
 
     try:
         response = await query_model(agent.model, messages, timeout, temperature)
+        content = ""
+        if not isinstance(response, dict):
+            response = {"error": True, "error_message": "provider returned a non-dict result"}
+        elif response.get("error"):
+            response = {
+                **response,
+                "error_message": _failure_text(response.get("error_message"), "provider error (no message)"),
+            }
+        else:
+            content = response.get("content", "")
+            if not isinstance(content, str):
+                content = str(content) if content else ""
+            if not content.strip():
+                response = {"error": True, "error_message": "provider returned empty content"}
         if accountant is not None and attempt is not None:
             accountant.finish(attempt, response)
         duration_ms = int((time.time() - start_time) * 1000)
@@ -444,13 +536,9 @@ async def query_agent(
                 model=agent.model,
                 role=ROLES.get(agent.role, agent.role),
                 content="",
-                error=response.get("error_message", "Unknown error"),
+                error=response["error_message"],
                 duration_ms=duration_ms,
             )
-
-        content = response.get("content", "")
-        if not isinstance(content, str):
-            content = str(content) if content else ""
 
         return RoundResponse(
             agent_label=agent.label,
@@ -468,14 +556,14 @@ async def query_agent(
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
         if accountant is not None and attempt is not None:
-            accountant.finish(attempt, failed=True)
-        logger.error(f"Error querying agent {agent.label}: {e}")
+            accountant.finish(attempt, {"error": True, "error_message": _failure_text(e, type(e).__name__)})
+        logger.error(f"Error querying agent {agent.label}: {e!r}")
         return RoundResponse(
             agent_label=agent.label,
             model=agent.model,
             role=ROLES.get(agent.role, agent.role),
             content="",
-            error=str(e),
+            error=_failure_text(e, type(e).__name__),
             duration_ms=duration_ms,
         )
 
@@ -641,6 +729,11 @@ async def run_roundtable(
 
     settings = get_settings()
     effective_timeout = timeout_seconds if timeout_seconds is not None else settings.roundtable_timeout_seconds
+    requested_rounds = num_rounds
+    predict_roundtable_calls(len(agents), requested_rounds)  # rejects < 1 agents/rounds
+    num_rounds = min(requested_rounds, MAX_EXECUTED_ROUNDS)
+    run.requested_rounds = requested_rounds
+    run.executed_rounds = num_rounds
     predicted = predict_roundtable_calls(len(agents), num_rounds)
     budget = int(getattr(settings, "roundtable_max_calls_per_run", DEFAULT_MAX_CALLS_PER_RUN))
     subscription_parallel = int(
@@ -667,6 +760,7 @@ async def run_roundtable(
         "type": "roundtable_init",
         "run_id": run_id,
         "total_rounds": num_rounds,
+        "requested_rounds": requested_rounds,
         "council_members": [{"label": a.label, "model": a.model, "role": a.role} for a in agents],
         "call_accounting": accountant.snapshot(),
         "max_parallel": max_parallel,
@@ -674,6 +768,7 @@ async def run_roundtable(
 
     if predicted > budget:
         run.status = "budget_exceeded"
+        run.failure_reason = f"predicted {predicted} calls exceed roundtable_max_calls_per_run={budget}"
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()
         yield {
@@ -717,6 +812,17 @@ async def run_roundtable(
                 )
                 run.rounds.append(round1_result)
             yield event
+
+        if round1_result is None or not any(_seat_succeeded(r) for r in round1_result.responses):
+            # Quorum stop: no council seat answered, so there is nothing to critique or
+            # synthesize. Do not spend the moderator/chair calls on an empty panel.
+            run.status = "failed"
+            run.failure_reason = "no council seat succeeded in round 1"
+            run.failed_seats = _ordered_failed_seats(run.rounds, [a.label for a in agents])
+            run.completed_at = datetime.utcnow().isoformat()
+            run.call_accounting = accountant.snapshot()
+            yield {"type": "roundtable_failed", "failure_reason": run.failure_reason, "run": run.to_dict()}
+            return
 
         if num_rounds < 2:
             # Skip rounds 2-3 if only 1 round requested
@@ -847,25 +953,21 @@ async def run_roundtable(
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
-            accountant.finish(mod_attempt, moderator_response)
-
-            moderator_content = moderator_response.get("content", "")
-            if not isinstance(moderator_content, str):
-                moderator_content = str(moderator_content) if moderator_content else ""
-
-            run.moderator_summary = {
-                "model": moderator_model,
-                "content": moderator_content,
-                "error": moderator_response.get("error", False),
-            }
+            run.moderator_summary = _synthesis_result(moderator_model, moderator_response, "moderator")
+            accountant.finish(mod_attempt, run.moderator_summary)
 
         except Exception as e:
             if accountant.attempts and accountant.attempts[-1]["model"] == moderator_model:
                 accountant.finish(len(accountant.attempts) - 1, failed=True)
             else:
                 accountant.observe(moderator_model, failed=True)
-            logger.error(f"Moderator synthesis failed: {e}")
-            run.moderator_summary = {"model": moderator_model, "content": "", "error": True, "error_message": str(e)}
+            logger.error(f"Moderator synthesis failed: {e!r}")
+            run.moderator_summary = {
+                "model": moderator_model,
+                "content": "",
+                "error": True,
+                "error_message": _failure_text(e, type(e).__name__),
+            }
 
         yield {"type": "moderator_complete", "moderator_summary": run.moderator_summary}
 
@@ -906,31 +1008,35 @@ async def run_roundtable(
                 timeout=effective_timeout,
                 temperature=settings.chairman_temperature,
             )
-            accountant.finish(chair_attempt, chair_response)
-
-            chair_content = chair_response.get("content", "")
-            if not isinstance(chair_content, str):
-                chair_content = str(chair_content) if chair_content else ""
-
-            run.chair_final = {
-                "model": chair_model,
-                "content": chair_content,
-                "error": chair_response.get("error", False),
-            }
+            run.chair_final = _synthesis_result(chair_model, chair_response, "chair")
+            accountant.finish(chair_attempt, run.chair_final)
 
         except Exception as e:
             if accountant.attempts and accountant.attempts[-1]["model"] == chair_model:
                 accountant.finish(len(accountant.attempts) - 1, failed=True)
             else:
                 accountant.observe(chair_model, failed=True)
-            logger.error(f"Chair synthesis failed: {e}")
-            run.chair_final = {"model": chair_model, "content": "", "error": True, "error_message": str(e)}
+            logger.error(f"Chair synthesis failed: {e!r}")
+            run.chair_final = {
+                "model": chair_model,
+                "content": "",
+                "error": True,
+                "error_message": _failure_text(e, type(e).__name__),
+            }
 
-        run.status = "completed"
+        run.status, run.failure_reason, run.failed_seats = derive_run_outcome(
+            run.rounds, run.moderator_summary, run.chair_final, [a.label for a in agents]
+        )
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()
 
-        yield {"type": "chair_complete", "chair_final": run.chair_final, "run": run.to_dict()}
+        yield {
+            "type": "chair_complete",
+            "chair_final": run.chair_final,
+            "status": run.status,
+            "failure_reason": run.failure_reason,
+            "run": run.to_dict(),
+        }
 
     except asyncio.CancelledError:
         accountant.close_open(failed=True)

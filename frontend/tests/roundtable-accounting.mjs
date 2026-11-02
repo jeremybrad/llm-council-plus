@@ -54,7 +54,9 @@ try {
       assert.match(streamed, terminal === 'roundtable_budget_exceeded' ? /Attempted: 0/ : /Attempted: 4/);
       assert.match(streamed, terminal === 'roundtable_budget_exceeded' ? /Failed: 0/ : /Failed: 1/);
       assert.match(streamed, /quota usage: unknown/);
-      assert.equal(state.status, terminal === 'chair_complete' ? 'completed' : 'error');
+      // WOR-1016: terminal events now carry the run's real outcome.
+      const expected = { chair_complete: 'completed', roundtable_aborted: 'aborted', roundtable_budget_exceeded: 'budget_exceeded' };
+      assert.equal(state.status, expected[terminal]);
       if (terminal !== 'chair_complete') assert.match(streamed, /role="alert"/);
       const missingEvents = JSON.parse(readFileSync(`${process.env.WOR402_STREAM_EVIDENCE_DIR}/${terminal}-missing.json`, 'utf8'));
       const missingState = missingEvents.reduce(applyRoundtableEvent, { status: 'running', rounds: [] });
@@ -62,5 +64,34 @@ try {
       assert.match(render(missingState), /Failed: unknown/);
     }
   }
+  // WOR-1016 outcome presentation.
+  const base = { status: 'running', rounds: [] };
+  const legacy = applyRoundtableEvent(base, { type: 'roundtable_complete' });
+  assert.equal(legacy.status, 'completed');
+  assert.match(render(legacy), /status-badge complete/);
+  const degraded = applyRoundtableEvent(base, {
+    type: 'roundtable_complete',
+    data: { status: 'degraded', failure_reason: 'seat failures: Skeptic', failed_seats: ['Skeptic'] },
+  });
+  assert.equal(degraded.status, 'degraded');
+  assert.deepEqual(degraded.failed_seats, ['Skeptic']);
+  assert.match(render(degraded), /status-badge degraded/);
+  assert.match(render(degraded), /seat failures: Skeptic/);
+  assert.doesNotMatch(render(degraded), /status-badge complete/);
+  const failed = applyRoundtableEvent(base, {
+    type: 'roundtable_error',
+    message: 'Roundtable failed: no council seat succeeded in round 1',
+    data: { status: 'failed', failure_reason: 'no council seat succeeded in round 1', failed_seats: ['Builder'] },
+  });
+  assert.equal(failed.status, 'failed');
+  assert.match(render(failed), /status-badge failed/);
+  assert.match(render(failed), /role="alert">Roundtable failed: no council seat succeeded in round 1/);
+  assert.doesNotMatch(render(failed), /status-badge complete/);
+  const budget = applyRoundtableEvent(base, { type: 'roundtable_error', message: 'Predicted call budget exceeded', data: { status: 'budget_exceeded' } });
+  assert.match(render(budget), /Budget rejected/);
+  const chairFailed = render({ ...failed, chair_final: { model: 'm', content: '', error: true, error_message: 'x' } });
+  assert.match(chairFailed, /Chair failed: x/);
+  const modFailed = render({ ...degraded, moderator: { model: 'm', content: '', error: true, error_message: 'mod timeout' } });
+  assert.match(modFailed, /Moderator failed: mod timeout/);
   console.log('Synthetic timeline accounting and App event-state fixtures passed');
 } finally { await server.close(); }

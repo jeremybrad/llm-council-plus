@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import storage
@@ -19,6 +19,7 @@ from .council import (
     calculate_aggregate_rankings,
     generate_conversation_title,
     generate_search_query,
+    preflight_roundtable_models,
     stage1_collect_responses,
     stage2_collect_rankings,
     stage3_synthesize_final,
@@ -27,11 +28,12 @@ from .modes import ModeRunner
 from .modes.socrates_runner import SocratesRunner
 from .openai_compat import (
     ChatCompletionRequest,
+    RoundtableFailedError,
     generate_non_streaming_response,
     generate_openai_stream,
 )
 from .openai_compat import get_available_models as get_roundtable_models
-from .roundtable import get_default_council, run_roundtable
+from .roundtable import CAPTURABLE_RUN_STATUSES, MAX_EXECUTED_ROUNDS, get_default_council, run_roundtable
 from .search import SearchProvider, perform_web_search
 from .settings import (
     AVAILABLE_MODELS,
@@ -266,13 +268,24 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                     yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
                     return
 
-                agents = get_default_council(council_models)
                 moderator_model = settings.chairman_model  # Reuse chairman as moderator
                 chair_model = settings.chairman_model
-                num_rounds = settings.roundtable_num_rounds
+
+                # Fail-closed route preflight before any dispatch (WOR-362 / WOR-1016):
+                # blank, unprefixed, unknown or disabled routes never reach a provider.
+                route_problems = preflight_roundtable_models(council_models, moderator_model, chair_model, settings)
+                if route_problems:
+                    error_msg = "Roundtable refused before any model call: " + "; ".join(route_problems)
+                    storage.add_error_message(conversation_id, error_msg)
+                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+                    return
+
+                agents = get_default_council(council_models)
+                requested_rounds = settings.roundtable_num_rounds
+                num_rounds = min(requested_rounds, MAX_EXECUTED_ROUNDS)
                 max_parallel = settings.roundtable_max_parallel
 
-                yield f"data: {json.dumps({'type': 'roundtable_start', 'data': {'num_rounds': num_rounds, 'council_size': len(agents)}})}\n\n"
+                yield f"data: {json.dumps({'type': 'roundtable_start', 'data': {'num_rounds': num_rounds, 'requested_rounds': requested_rounds, 'council_size': len(agents)}})}\n\n"
                 await asyncio.sleep(0.05)
 
                 # Stream roundtable execution
@@ -320,22 +333,41 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         elif event_type == "chair_complete":
                             # Store run data for saving
                             run_data = event.get("run")
+                            outcome = {
+                                "status": (run_data or {}).get("status"),
+                                "failure_reason": (run_data or {}).get("failure_reason"),
+                                "failed_seats": (run_data or {}).get("failed_seats", []),
+                            }
                             yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             yield f"data: {json.dumps({'type': 'chair_complete', 'data': event.get('chair_final')})}\n\n"
-                            # Send roundtable_complete
-                            yield f"data: {json.dumps({'type': 'roundtable_complete'})}\n\n"
+                            if outcome["status"] in CAPTURABLE_RUN_STATUSES:
+                                yield f"data: {json.dumps({'type': 'roundtable_complete', 'data': outcome})}\n\n"
+                            else:
+                                message = f"Roundtable failed: {outcome['failure_reason'] or 'no council answer'}"
+                                yield f"data: {json.dumps({'type': 'roundtable_error', 'message': message, 'data': outcome})}\n\n"
+
+                        elif event_type == "roundtable_failed":
+                            run_data = event.get("run")
+                            outcome = {
+                                "status": (run_data or {}).get("status"),
+                                "failure_reason": (run_data or {}).get("failure_reason"),
+                                "failed_seats": (run_data or {}).get("failed_seats", []),
+                            }
+                            yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
+                            message = f"Roundtable failed: {outcome['failure_reason'] or 'no council answer'}"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': message, 'data': outcome})}\n\n"
 
                         elif event_type == "roundtable_budget_exceeded":
                             run_data = event.get("run")
                             yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
-                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'status': 'budget_exceeded', 'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
 
                         elif event_type == "roundtable_aborted":
                             run_data = event.get("run")
                             yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
-                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted', 'data': {'status': 'aborted'}})}\n\n"
 
                         else:
                             # Forward unknown events as-is
@@ -372,7 +404,11 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         chair_final=run_data.get("chair_final", {}),
                         metadata={
                             "execution_mode": "roundtable",
+                            "status": run_data.get("status"),
+                            "failure_reason": run_data.get("failure_reason"),
+                            "failed_seats": run_data.get("failed_seats", []),
                             "num_rounds": num_rounds,
+                            "requested_rounds": requested_rounds,
                             "council_members": [a.model for a in agents],
                             "moderator_model": moderator_model,
                             "chair_model": chair_model,
@@ -381,13 +417,16 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         },
                     )
 
-                    # Capture turns to SADB hot facts pipeline (PRD-06f1b)
-                    try:
-                        from .turn_capture import capture_run as capture_turns
+                    # Capture turns to SADB hot facts pipeline (PRD-06f1b). Only runs that
+                    # produced a chair answer are captured; failed, aborted and
+                    # budget-rejected runs never enter SADB (WOR-1016).
+                    if run_data.get("status") in CAPTURABLE_RUN_STATUSES:
+                        try:
+                            from .turn_capture import capture_run as capture_turns
 
-                        capture_turns(run_data)
-                    except Exception as e:
-                        print(f"Turn capture warning: {e}")
+                            capture_turns(run_data)
+                        except Exception as e:
+                            print(f"Turn capture warning: {e}")
 
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
                 return  # Exit early - roundtable flow is complete
@@ -1486,7 +1525,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
 
     Configuration options (can be passed in request body):
     - council_models: List of model IDs for the council
-    - num_rounds: Number of deliberation rounds (1-5)
+    - num_rounds: Number of deliberation rounds (capped at 3; requested count is recorded)
     - chair_model: Model for final synthesis
     - moderator_model: Model for moderator synthesis
     - max_parallel: Max concurrent model queries
@@ -1495,7 +1534,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
     - "roundtable" - Default settings
     - "roundtable:fast" - 1 round, quick mode
     - "roundtable:thorough" - 3 rounds
-    - "roundtable:deep" - 5 rounds
+    - "roundtable:deep" - requests 5 rounds; executes 3 (capped)
     - "roundtable:N" - N rounds (e.g., "roundtable:2")
     """
     if body.stream:
@@ -1509,8 +1548,20 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
             },
         )
     else:
-        response = await generate_non_streaming_response(body, request)
-        return response
+        try:
+            return await generate_non_streaming_response(body, request)
+        except RoundtableFailedError as e:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": {
+                        "message": e.message,
+                        "type": "roundtable_failed",
+                        "code": e.outcome.get("status") or "failed",
+                        "failed_seats": e.outcome.get("failed_seats", []),
+                    }
+                },
+            )
 
 
 if __name__ == "__main__":

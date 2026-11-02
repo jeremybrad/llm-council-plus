@@ -14,8 +14,38 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from .council import preflight_roundtable_models
 from .roundtable import get_default_council, run_roundtable
 from .settings import get_settings
+
+
+class RoundtableFailedError(Exception):
+    """The council produced no answer; /v1 must not present this as a successful completion."""
+
+    def __init__(self, message: str, outcome: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.message = message
+        self.outcome = outcome or {}
+
+
+def _outcome(run: dict[str, Any] | None) -> dict[str, Any]:
+    run = run or {}
+    return {
+        "status": run.get("status"),
+        "failure_reason": run.get("failure_reason"),
+        "failed_seats": run.get("failed_seats", []),
+    }
+
+
+def _degraded_notice(outcome: dict[str, Any]) -> str:
+    return f"[Degraded council: {outcome.get('failure_reason') or 'some council calls failed'}]\n\n"
+
+
+def _failed_notice(outcome: dict[str, Any]) -> str:
+    return (
+        f"[Roundtable failed: {outcome.get('failure_reason') or 'no council answer'}. No council answer was produced.]"
+    )
+
 
 # ============================================================================
 # OpenAI-Compatible Request/Response Models
@@ -230,8 +260,6 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
         yield "data: [DONE]\n\n"
         return
 
-    agents = get_default_council(council_models)
-
     num_rounds = request.num_rounds or model_config.get("num_rounds") or settings.roundtable_num_rounds
     moderator_model = request.moderator_model or settings.chairman_model
     chair_model = request.chair_model or settings.chairman_model
@@ -239,6 +267,26 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
     timeout_seconds = (
         request.timeout_seconds if request.timeout_seconds is not None else settings.roundtable_timeout_seconds
     )
+
+    route_problems = preflight_roundtable_models(council_models, moderator_model, chair_model, settings)
+    if route_problems:
+        error_chunk = ChatCompletionChunk(
+            id=completion_id,
+            created=created,
+            model=request.model,
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    delta={"content": "Error: roundtable refused before any model call: " + "; ".join(route_problems)},
+                    finish_reason="stop",
+                )
+            ],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    agents = get_default_council(council_models)
 
     # Generate a conversation ID for this request
     conversation_id = f"openai-compat-{uuid.uuid4().hex[:12]}"
@@ -313,7 +361,10 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
             elif event_type == "round_progress":
                 response = event.get("response", {})
                 agent_label = response.get("agent_label", "Agent")
-                progress_msg = f"  - {agent_label} responded\n"
+                if response.get("error"):
+                    progress_msg = f"  - {agent_label} failed: {response.get('error')}\n"
+                else:
+                    progress_msg = f"  - {agent_label} responded\n"
 
                 chunk = ChatCompletionChunk(
                     id=completion_id,
@@ -344,7 +395,11 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
             elif event_type == "moderator_complete":
-                progress_msg = "  - Complete\n\n"
+                summary = event.get("moderator_summary") or {}
+                if summary.get("error"):
+                    progress_msg = f"  - Failed: {summary.get('error_message') or 'no summary'}\n\n"
+                else:
+                    progress_msg = "  - Complete\n\n"
                 chunk = ChatCompletionChunk(
                     id=completion_id,
                     created=created,
@@ -364,9 +419,14 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
             elif event_type == "chair_complete":
-                # Stream the actual final content
+                # Stream the actual final content, labelled with the run's real outcome
                 chair_final = event.get("chair_final", {})
+                outcome = _outcome(event.get("run"))
                 final_content = chair_final.get("content", "")
+                if outcome["status"] == "failed" or not final_content:
+                    final_content = _failed_notice(outcome)
+                elif outcome["status"] == "degraded":
+                    final_content = _degraded_notice(outcome) + final_content
 
                 if final_content:
                     # Stream in reasonable chunks for responsiveness
@@ -380,6 +440,18 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
                             choices=[ChatCompletionChoice(index=0, delta={"content": text_chunk})],
                         )
                         yield f"data: {chunk.model_dump_json()}\n\n"
+
+            elif event_type == "roundtable_failed":
+                progress_msg = "\n" + _failed_notice(_outcome(event.get("run")))
+                chunk = ChatCompletionChunk(
+                    id=completion_id,
+                    created=created,
+                    model=request.model,
+                    choices=[ChatCompletionChoice(index=0, delta={"content": progress_msg}, finish_reason="stop")],
+                )
+                yield f"data: {chunk.model_dump_json()}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
             elif event_type == "roundtable_aborted":
                 progress_msg = "\n\n[Roundtable was aborted]"
@@ -467,7 +539,6 @@ async def generate_non_streaming_response(
             ],
         )
 
-    agents = get_default_council(council_models)
     num_rounds = request.num_rounds or model_config.get("num_rounds") or settings.roundtable_num_rounds
     moderator_model = request.moderator_model or settings.chairman_model
     chair_model = request.chair_model or settings.chairman_model
@@ -476,10 +547,31 @@ async def generate_non_streaming_response(
         request.timeout_seconds if request.timeout_seconds is not None else settings.roundtable_timeout_seconds
     )
 
+    route_problems = preflight_roundtable_models(council_models, moderator_model, chair_model, settings)
+    if route_problems:
+        return ChatCompletionResponse(
+            id=completion_id,
+            created=created,
+            model=request.model,
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(
+                        role="assistant",
+                        content="Error: roundtable refused before any model call: " + "; ".join(route_problems),
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+    agents = get_default_council(council_models)
+
     conversation_id = f"openai-compat-{uuid.uuid4().hex[:12]}"
 
     # Collect final content
     final_content = ""
+    failed_outcome: dict[str, Any] | None = None
 
     try:
         async for event in run_roundtable(
@@ -502,10 +594,21 @@ async def generate_non_streaming_response(
                 )
             elif event.get("type") == "chair_complete":
                 chair_final = event.get("chair_final", {})
+                outcome = _outcome(event.get("run"))
                 final_content = chair_final.get("content", "")
+                if outcome["status"] == "failed" or not final_content:
+                    failed_outcome = outcome
+                elif outcome["status"] == "degraded":
+                    final_content = _degraded_notice(outcome) + final_content
+            elif event.get("type") == "roundtable_failed":
+                failed_outcome = _outcome(event.get("run"))
 
     except Exception as e:
         final_content = f"Error during roundtable: {str(e)}"
+
+    if failed_outcome is not None:
+        # A completely failed council is an error, not a successful completion.
+        raise RoundtableFailedError(_failed_notice(failed_outcome), failed_outcome)
 
     return ChatCompletionResponse(
         id=completion_id,

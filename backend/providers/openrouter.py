@@ -13,6 +13,12 @@ class OpenRouterProvider(LLMProvider):
     async def query(
         self, model_id: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
     ) -> dict[str, Any]:
+        # Defense in depth: council.query_model already refuses disabled routes, but this
+        # metered provider must not be reachable while disabled by any other caller.
+        enabled = getattr(get_settings(), "enabled_providers", None) or {}
+        if not (isinstance(enabled, dict) and enabled.get("openrouter") is True):
+            return {"error": True, "error_message": "route refused: provider 'openrouter' is disabled in settings"}
+
         # Strip internal prefix if present
         if model_id.startswith("openrouter:"):
             model_id = model_id.replace("openrouter:", "", 1)

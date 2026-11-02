@@ -329,8 +329,12 @@ The backend provides an OpenAI-compatible API at `/v1/chat/completions` that all
 | `roundtable` | 3 | Default deliberation |
 | `roundtable:fast` | 1 | Quick responses |
 | `roundtable:thorough` | 3 | Standard depth |
-| `roundtable:deep` | 5 | Extended deliberation |
-| `roundtable:N` | N | Custom round count |
+| `roundtable:deep` | 3 (requested 5) | Requests more rounds; executes the 3 implemented rounds |
+| `roundtable:N` | min(N, 3) | Custom round count, capped at 3 |
+
+The engine implements three rounds (opening, critique, revision). Any request above 3 is capped
+**before** call prediction and budgeting; the run records `requested_rounds` and `executed_rounds`
+(WOR-1016).
 
 ### Request Parameters (via extra_body)
 
@@ -488,6 +492,35 @@ Seats resolve only C010 `scripts/agent_launch/{claude,grok,codex}-subscription` 
 | `agentcli:codex` | `codex-subscription` | `login status` reports a positive ChatGPT login banner (not `Not logged in…`) | `exec --json --sandbox read-only --ephemeral --skip-git-repo-check -` (stdin). Uses the **installed CLI default model**; no unverified `-m` pin |
 
 `enabled_providers.agentcli` defaults **false**. That is an implemented seat, not an enabled production setting. Cancellation and timeout kill the child process group. No metered fallback.
+
+### Model routing is fail-closed (WOR-362 / WOR-1016)
+
+Every model ID must name an explicit, known provider prefix (`ollama:`, `agentcli:`, ...) whose
+provider is enabled in settings. Blank, unprefixed and unknown-prefix IDs are refused; there is no
+automatic OpenRouter fallback. `council.query_model` refuses a route without contacting any
+provider, `OpenRouterProvider` also refuses while `enabled_providers.openrouter` is false, and the
+default for `openrouter` is now **false**. Roundtable entry points (UI SSE and `/v1`) run
+`preflight_roundtable_models` and refuse blank seat, moderator or chair configurations before any
+call. A stored key or an enabled flag is configuration, not spending authority: under the
+operator's $0 metered-model budget, metered providers stay off (broader inventory: WOR-362).
+
+### Roundtable run outcome (WOR-1016)
+
+A run ends with one of `completed`, `degraded`, `failed`, `aborted` or `budget_exceeded`:
+
+- **completed**: every seat call succeeded and the chair returned content.
+- **degraded**: the chair answered, but a seat or the moderator failed (`failed_seats`, `failure_reason`).
+- **failed**: no seat succeeded in round 1 (quorum stop: later rounds, moderator and chair are
+  skipped), or the chair failed or returned nothing.
+
+Seat, moderator and chair error reasons are never empty. Only `completed` and `degraded` runs are
+turn-captured (gated in `main.py` and again in `turn_capture.capture_run`), and captured turns carry
+`run_status`. The timeline shows Degraded/Failed/Budget-rejected badges. `/v1` labels degraded
+answers and never returns a failed council as a successful completion: non-streaming responds
+HTTP 502 with an OpenAI-style error body; streaming emits an explicit failure notice.
+
+Tests isolate themselves at conftest import: disposable data/settings/`SADB_DATA_DIR`, and network
+connections are blocked.
 
 ### Roundtable call budget (WOR-402)
 
