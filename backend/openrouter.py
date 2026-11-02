@@ -12,6 +12,12 @@ MAX_RETRIES = 2
 INITIAL_RETRY_DELAY = 1.0  # seconds
 
 
+METERED_REFUSAL = (
+    "route refused: provider 'openrouter' is a metered API route; refused under the $0 "
+    "metered-model budget (an enabled flag or stored key is not spending authority)"
+)
+
+
 async def query_model(
     model: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
 ) -> dict[str, Any] | None:
@@ -27,7 +33,10 @@ async def query_model(
     Returns:
         Response dict with 'content', optional 'reasoning_details', and 'error' if failed
     """
-    api_key = get_openrouter_api_key()
+    # Lowest-layer guard (WOR-362): OpenRouter inference is metered. No caller, flag or
+    # stored key may reach the network from here; query_models_parallel inherits this.
+    return {"error": True, "error_message": METERED_REFUSAL}
+    api_key = get_openrouter_api_key()  # unreachable: retained for upstream diff clarity
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

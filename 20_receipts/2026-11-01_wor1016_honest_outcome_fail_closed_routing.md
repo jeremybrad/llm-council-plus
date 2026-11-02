@@ -36,6 +36,22 @@ Jeremy's ruling on WOR-362: reject blank, unprefixed and unknown routes, with no
 - points the data, settings, debug, mode-session and claims paths at that root;
 - blocks non-UNIX socket connections and DNS.
 
+## Explicitly enabled metered routes (WOR-362 follow-up, same PR)
+
+Jeremy asked whether refusing the *automatic* fallback is enough, given his rule that a saved key or an enabled toggle is not spending authorization. At head `56ee2d2` it was not:
+- `provider_enabled()` still allowed `openrouter` when its flag was true, and the direct providers when `direct` plus their own toggle were true. `OpenRouterProvider` then dispatched.
+- Anthropic's settings key check sent a real `POST /messages` request (paid inference) using the stored key.
+
+Synthetic RED: 21 new tests failed at `56ee2d2`.
+
+The repair:
+- `METERED_API_PROVIDERS` (`openrouter`, `openai`, `anthropic`, `google`, `mistral`, `deepseek`, `groq`, `custom`) is refused unconditionally in `check_model_route`, so `query_model` and the preflight both refuse it.
+- `OpenRouterProvider.query` and the lowest-layer `openrouter.query_model` refuse before any HTTP request.
+- The Anthropic key check now lists models instead of sending a message.
+- `custom` is refused because an arbitrary endpoint's billing cannot be verified.
+- Remaining routes: local `ollama` and guarded `agentcli`.
+- Open WOR-362 question, not decided here: whether Ollama Cloud models proxied by a local daemon count as metered.
+
 ## Evidence
 
 - The RED baseline at `1d70601` (same scenarios, mocks only) printed:

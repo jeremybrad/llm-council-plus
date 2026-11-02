@@ -502,7 +502,14 @@ provider, `OpenRouterProvider` also refuses while `enabled_providers.openrouter`
 default for `openrouter` is now **false**. Roundtable entry points (UI SSE and `/v1`) run
 `preflight_roundtable_models` and refuse blank seat, moderator or chair configurations before any
 call. A stored key or an enabled flag is configuration, not spending authority: under the
-operator's $0 metered-model budget, metered providers stay off (broader inventory: WOR-362).
+operator's $0 metered-model budget, every API-key-backed route (`openrouter`, `openai`,
+`anthropic`, `google`, `mistral`, `deepseek`, `groq`, and `custom`, whose billing cannot be
+verified) is refused **unconditionally**, whatever the settings say. There is no paid-provider
+exception in code. The remaining inference routes are local `ollama` and the guarded subscription
+`agentcli` seats, each only when enabled. Provider key checks never perform inference; the
+Anthropic check lists models instead of sending a message. Model-list requests are not inference.
+Whether Ollama Cloud models routed through a local Ollama daemon count as metered is an open
+WOR-362 question and is not decided here.
 
 ### Roundtable run outcome (WOR-1016)
 

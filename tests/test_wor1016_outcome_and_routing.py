@@ -94,8 +94,8 @@ def test_default_settings_do_not_enable_openrouter():
         ("anthropic/claude-sonnet-4", "no provider prefix"),
         ("antigravity:gemini", "unknown provider prefix"),
         ("mock:builder", "unknown provider prefix"),
-        ("openrouter:openai/gpt-4o", "disabled"),
-        ("openai:gpt-4o", "disabled"),
+        ("openrouter:openai/gpt-4o", "metered"),
+        ("openai:gpt-4o", "metered"),
     ],
 )
 def test_refused_routes(model, fragment):
@@ -107,13 +107,9 @@ def test_enabled_route_is_allowed():
     assert council.check_model_route("ollama:llama3.2", _settings(ollama=True)) is None
 
 
-def test_direct_provider_needs_master_and_individual_toggle():
-    s = _settings(direct=True)
-    assert "disabled" in council.check_model_route("openai:gpt-4o", s)
-    s.direct_provider_toggles = {"openai": True}
-    assert council.check_model_route("openai:gpt-4o", s) is None
-    s.enabled_providers["direct"] = False
-    assert "disabled" in council.check_model_route("openai:gpt-4o", s)
+def test_disabled_non_metered_provider_is_refused():
+    assert "disabled" in council.check_model_route("ollama:llama3.2", _settings())
+    assert "disabled" in council.check_model_route("agentcli:claude", _settings(ollama=True))
 
 
 def test_get_provider_for_model_never_falls_back():
@@ -123,7 +119,7 @@ def test_get_provider_for_model_never_falls_back():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["", "gpt-4o", "antigravity:x", "openrouter:openai/gpt-4o"])
+@pytest.mark.parametrize("model", ["", "gpt-4o", "antigravity:x", "openrouter:openai/gpt-4o", "ollama:x"])
 async def test_query_model_refuses_without_contacting_any_provider(monkeypatch, model):
     spies = {name: AsyncMock(return_value={"content": "should not happen"}) for name in council.PROVIDERS}
     for name, provider in council.PROVIDERS.items():
@@ -146,7 +142,7 @@ async def test_openrouter_provider_refuses_when_disabled(monkeypatch):
         lambda: SimpleNamespace(enabled_providers={"openrouter": False}, openrouter_api_key="stored-key"),
     )
     result = await OpenRouterProvider().query("openrouter:x", [{"role": "user", "content": "q"}])
-    assert result["error"] is True and "disabled" in result["error_message"]
+    assert result["error"] is True and "metered" in result["error_message"]
     inner.assert_not_awaited()
 
 
@@ -601,3 +597,105 @@ async def test_v1_degraded_answer_is_labelled(monkeypatch):
 def test_isolation_root_is_not_real_sadb():
     assert os.environ["SADB_DATA_DIR"] == str(ISOLATED_SADB_ROOT)
     assert REAL_SADB_ROOT not in ISOLATED_SADB_ROOT.parents
+
+
+# ---------------------------------------------------------------------------
+# WOR-362: an enabled flag or stored key is not spending authority.
+# Metered API routes are refused unconditionally; no paid-provider exception.
+# ---------------------------------------------------------------------------
+
+METERED = ["openrouter", "openai", "anthropic", "google", "mistral", "deepseek", "groq", "custom"]
+
+
+def _everything_enabled():
+    return SimpleNamespace(
+        enabled_providers={
+            "openrouter": True,
+            "ollama": True,
+            "groq": True,
+            "direct": True,
+            "custom": True,
+            "agentcli": True,
+        },
+        direct_provider_toggles=dict.fromkeys(("openai", "anthropic", "google", "mistral", "deepseek", "groq"), True),
+        openrouter_api_key="stored-key",
+        openai_api_key="stored-key",
+        anthropic_api_key="stored-key",
+    )
+
+
+@pytest.mark.parametrize("provider", METERED)
+def test_metered_route_refused_even_when_enabled_and_keyed(provider):
+    reason = council.check_model_route(f"{provider}:some-model", _everything_enabled())
+    assert reason and "metered" in reason
+
+
+def test_non_metered_enabled_routes_still_allowed():
+    s = _everything_enabled()
+    assert council.check_model_route("ollama:llama3.2", s) is None
+    assert council.check_model_route("agentcli:claude", s) is None
+
+
+def test_every_registered_provider_is_classified():
+    assert set(council.PROVIDERS) == set(METERED) | {"ollama", "agentcli"}
+    assert council.METERED_API_PROVIDERS == frozenset(METERED)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", METERED)
+async def test_query_model_never_dispatches_metered_when_enabled(monkeypatch, provider):
+    spies = {name: AsyncMock(return_value={"content": "paid inference"}) for name in council.PROVIDERS}
+    for name, p in council.PROVIDERS.items():
+        monkeypatch.setattr(p, "query", spies[name])
+    monkeypatch.setattr(council, "get_settings", _everything_enabled)
+    result = await council.query_model(f"{provider}:m", [{"role": "user", "content": "q"}])
+    assert result["error"] is True and "metered" in result["error_message"]
+    for spy in spies.values():
+        spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_layers_refuse_even_when_enabled_with_key(monkeypatch):
+    from backend import openrouter as openrouter_module
+
+    post = AsyncMock(side_effect=AssertionError("no HTTP request may be made"))
+    monkeypatch.setattr("httpx.AsyncClient.post", post)
+    enabled = SimpleNamespace(enabled_providers={"openrouter": True}, openrouter_api_key="stored-key")
+    monkeypatch.setattr("backend.providers.openrouter.get_settings", lambda: enabled)
+    monkeypatch.setattr(openrouter_module, "get_openrouter_api_key", lambda: "stored-key")
+    msgs = [{"role": "user", "content": "q"}]
+    provider_result = await OpenRouterProvider().query("openrouter:x", msgs)
+    module_result = await openrouter_module.query_model("x", msgs)
+    assert provider_result["error"] is True and "metered" in provider_result["error_message"]
+    assert module_result["error"] is True and "metered" in module_result["error_message"]
+    post.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("models", "chair"),
+    [(["openai:gpt-4o", "ollama:a"], "ollama:c"), (["ollama:a", "ollama:b"], "anthropic:claude")],
+)
+def test_preflight_refuses_explicit_metered_seats_and_chair(models, chair):
+    problems = council.preflight_roundtable_models(models, chair, chair, _everything_enabled())
+    assert problems and all("metered" in p for p in problems)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_key_check_makes_no_inference_request(monkeypatch):
+    from backend.providers.anthropic import AnthropicProvider
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": []}
+
+    post = AsyncMock(side_effect=AssertionError("validate_key must not POST /messages (paid inference)"))
+    get = AsyncMock(return_value=FakeResponse())
+    monkeypatch.setattr("httpx.AsyncClient.post", post)
+    monkeypatch.setattr("httpx.AsyncClient.get", get)
+    result = await AnthropicProvider().validate_key("stored-key")
+    post.assert_not_awaited()
+    get.assert_awaited_once()
+    assert get.await_args.args[0].endswith("/models")
+    assert result["success"] is True

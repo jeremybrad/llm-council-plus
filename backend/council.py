@@ -37,6 +37,16 @@ PROVIDERS = {
 # Providers whose enablement is the "direct" master toggle plus a per-provider toggle.
 DIRECT_PROVIDERS = frozenset({"openai", "anthropic", "google", "mistral", "deepseek"})
 
+# API-key-backed (metered or billing-unverifiable) inference routes. The operator's
+# standing metered-model budget is $0: an enabled flag or a stored key is
+# configuration, never spending authority, so these are refused unconditionally.
+# There is no paid-provider exception in code (WOR-362 / WOR-1016). `custom` is
+# included because an arbitrary OpenAI-compatible endpoint's billing cannot be
+# verified. Remaining routes: local `ollama` and the guarded subscription `agentcli`.
+METERED_API_PROVIDERS = frozenset(
+    {"openrouter", "openai", "anthropic", "google", "mistral", "deepseek", "groq", "custom"}
+)
+
 
 class ModelRouteError(ValueError):
     """A model ID cannot be routed to an enabled provider (fail closed)."""
@@ -76,6 +86,11 @@ def check_model_route(model_id: Any, settings: Any = None) -> str | None:
         provider_name = _provider_name(model_id)
     except ModelRouteError as e:
         return str(e)
+    if provider_name in METERED_API_PROVIDERS:
+        return (
+            f"provider {provider_name!r} is a metered API route; refused under the $0 "
+            "metered-model budget (an enabled flag or stored key is not spending authority)"
+        )
     if settings is None:
         settings = get_settings()
     if not provider_enabled(provider_name, settings):
