@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Mirrors backend.roundtable.CAPTURABLE_RUN_STATUSES (kept local to avoid an import cycle).
+CAPTURABLE_RUN_STATUSES = frozenset({"completed", "degraded"})
+
 
 def resolve_sadb_root(override: Path | None = None) -> Path:
     """Resolve the SADB data root directory.
@@ -313,6 +316,12 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
             }
         )
 
+    # Every captured turn carries the run outcome so consumers can tell a degraded
+    # council answer from a fully completed one (WOR-1016).
+    for turn in turns:
+        turn["meta"]["run_status"] = run_data.get("status")
+        turn["meta"]["failed_seats"] = list(run_data.get("failed_seats") or [])
+        turn["meta"]["failure_reason"] = run_data.get("failure_reason")
     return turns
 
 
@@ -383,6 +392,18 @@ def capture_run(
     Returns:
         Path to output file, or None if capture failed
     """
+    # Defense in depth for the caller-side gate in main.py: only runs that produced a
+    # chair answer are captured. Failed, aborted, budget-rejected and status-less runs
+    # are refused before any path is resolved or written (WOR-1016).
+    status = run_data.get("status") if isinstance(run_data, dict) else None
+    if status not in CAPTURABLE_RUN_STATUSES:
+        print(f"Turn capture skipped: run status {status!r} is not capturable")
+        return None
+    chair = run_data.get("chair_final") if isinstance(run_data.get("chair_final"), dict) else {}
+    if chair.get("error") or not str(chair.get("content") or "").strip():
+        print("Turn capture skipped: run has no chair answer")
+        return None
+
     try:
         # Resolve session ID
         if session_id is None:

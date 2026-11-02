@@ -17,7 +17,9 @@ DEFAULT_CHAIRMAN_MODEL = ""
 
 # Default enabled providers
 DEFAULT_ENABLED_PROVIDERS = {
-    "openrouter": True,
+    # Metered: off by default and enforced at dispatch. Enabling it, or storing a key,
+    # does not authorize paid inference under the operator's $0 budget (WOR-362).
+    "openrouter": False,
     "ollama": False,
     "groq": False,
     "direct": False,  # Master toggle for all direct connections
@@ -185,7 +187,7 @@ class Settings(BaseModel):
     execution_mode: str = "full"
 
     # Roundtable Mode Settings
-    roundtable_num_rounds: int = 3  # Number of deliberation rounds (1-5)
+    roundtable_num_rounds: int = 3  # Requested rounds; execution is capped at 3 (WOR-1016)
     roundtable_max_parallel: int = 2  # Max concurrent model queries (for local models)
     roundtable_timeout_seconds: float = 120.0  # Per-model request timeout across a roundtable run
     roundtable_debug_prompts: bool = False  # Dump rendered prompts to data/debug/prompts/

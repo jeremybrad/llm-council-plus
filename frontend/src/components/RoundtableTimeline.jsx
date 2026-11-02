@@ -26,10 +26,13 @@ export default function RoundtableTimeline({
         return null;
     }
 
-    const { rounds, moderator, chair_final, council_members, status, call_accounting, error } = roundtable;
+    const { rounds, moderator, chair_final, council_members, status, call_accounting, error, failure_reason } = roundtable;
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : 'unknown';
     const isComplete = status === 'completed';
     const isAborted = status === 'aborted';
+    const isDegraded = status === 'degraded';
+    const isFailed = status === 'failed' || status === 'error';
+    const isBudgetRejected = status === 'budget_exceeded';
 
     const toggleRound = (roundNum) => {
         setExpandedRounds(prev => ({
@@ -66,9 +69,18 @@ export default function RoundtableTimeline({
                     Roundtable Deliberation
                     {isAborted && <span className="status-badge aborted">Aborted</span>}
                     {isComplete && <span className="status-badge complete">Complete</span>}
+                    {isDegraded && <span className="status-badge degraded">Degraded</span>}
+                    {isFailed && <span className="status-badge failed">Failed</span>}
+                    {isBudgetRejected && <span className="status-badge failed">Budget rejected</span>}
                 </div>
                 <StageTimer startTime={startTime} endTime={endTime} label="Total" />
             </div>
+
+            {isDegraded && failure_reason && (
+                <div className="roundtable-outcome" role="status">
+                    {failure_reason}
+                </div>
+            )}
 
             {call_accounting && (
                 <section className="roundtable-call-accounting" aria-label="Run call counts" aria-live="polite">
@@ -149,7 +161,7 @@ export default function RoundtableTimeline({
                                                             <div className="response-error">
                                                                 <span className="error-icon">⚠️</span>
                                                                 <span className="error-text">
-                                                                    {response.error_message || 'Failed to respond'}
+                                                                    {response.error || response.error_message || 'Failed to respond'}
                                                                 </span>
                                                             </div>
                                                         ) : (
@@ -185,9 +197,11 @@ export default function RoundtableTimeline({
                     <div className="synthesis-content markdown-content">
                         <ThinkBlockRenderer
                             content={
-                                typeof moderator.content === 'string'
-                                    ? moderator.content
-                                    : String(moderator.content || '')
+                                moderator.error
+                                    ? `⚠️ Moderator failed: ${moderator.error_message || 'no reason recorded'}`
+                                    : typeof moderator.content === 'string'
+                                        ? moderator.content
+                                        : String(moderator.content || '')
                             }
                         />
                     </div>
@@ -204,9 +218,11 @@ export default function RoundtableTimeline({
                     <div className="synthesis-content markdown-content">
                         <ThinkBlockRenderer
                             content={
-                                typeof chair_final.content === 'string'
-                                    ? chair_final.content
-                                    : String(chair_final.content || '')
+                                chair_final.error
+                                    ? `⚠️ Chair failed: ${chair_final.error_message || 'no reason recorded'}`
+                                    : typeof chair_final.content === 'string'
+                                        ? chair_final.content
+                                        : String(chair_final.content || '')
                             }
                         />
                     </div>

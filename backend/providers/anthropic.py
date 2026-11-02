@@ -122,19 +122,14 @@ class AnthropicProvider(LLMProvider):
 
     async def validate_key(self, api_key: str) -> dict[str, Any]:
         try:
-            # Test with a cheap call
+            # List models rather than sending a message: a key check must never be
+            # paid inference (WOR-362 $0 metered budget).
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    f"{self.BASE_URL}/messages",
+                response = await client.get(
+                    f"{self.BASE_URL}/models",
                     headers={
                         "x-api-key": api_key,
                         "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": "claude-3-haiku-20240307",
-                        "messages": [{"role": "user", "content": "Hi"}],
-                        "max_tokens": 1,
                     },
                 )
 

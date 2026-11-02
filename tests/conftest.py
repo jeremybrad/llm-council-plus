@@ -1,9 +1,134 @@
 """Pytest fixtures for roundtable tests."""
 
+import os
+import socket
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Test isolation (WOR-1016). Everything below runs at conftest import, which pytest
+# performs before collecting (importing) any test module, so module-level path
+# constants, SADB root resolution and sockets can never reach real operator data,
+# settings, credentials or the network. Values are assigned directly (not via a
+# fixture) and stay in force for the whole session; per-test monkeypatches layer
+# on top and restore to these isolated values.
+# ---------------------------------------------------------------------------
+ISOLATION_ROOT = Path(tempfile.mkdtemp(prefix="llm-council-tests-")).resolve()
+ISOLATED_SADB_ROOT = ISOLATION_ROOT / "sadb"
+ISOLATED_DATA_DIR = ISOLATION_ROOT / "data"
+os.environ["SADB_DATA_DIR"] = str(ISOLATED_SADB_ROOT)
+os.environ["SADB_CLI_PATH"] = str(ISOLATION_ROOT / "no-sadb-cli")
+SCRUBBED_KEY_ENV_VARS = (
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "GROK_API_KEY",
+)
+for _name in SCRUBBED_KEY_ENV_VARS:
+    os.environ.pop(_name, None)
+
+
+class NetworkBlockedError(RuntimeError):
+    """Raised when a test tries to open a network connection."""
+
+
+def _blocked(*_args, **_kwargs):
+    raise NetworkBlockedError("network access is blocked in tests (WOR-1016 isolation)")
+
+
+_REAL_CONNECT = socket.socket.connect
+_REAL_CONNECT_EX = socket.socket.connect_ex
+_REAL_SENDTO = socket.socket.sendto
+_REAL_SENDMSG = getattr(socket.socket, "sendmsg", None)
+
+
+def _is_unix(sock) -> bool:
+    return sock.family == getattr(socket, "AF_UNIX", None)
+
+
+def _guarded_connect(self, address):
+    if _is_unix(self):
+        return _REAL_CONNECT(self, address)
+    _blocked()
+
+
+def _guarded_connect_ex(self, address):
+    if _is_unix(self):
+        return _REAL_CONNECT_EX(self, address)
+    _blocked()
+
+
+def _guarded_sendto(self, *args):
+    if _is_unix(self):
+        return _REAL_SENDTO(self, *args)
+    _blocked()
+
+
+def _guarded_sendmsg(self, *args):
+    if _is_unix(self) and _REAL_SENDMSG is not None:
+        return _REAL_SENDMSG(self, *args)
+    _blocked()
+
+
+# Network guard first, so even import-time code in backend modules cannot connect.
+socket.socket.connect = _guarded_connect
+socket.socket.connect_ex = _guarded_connect_ex
+socket.socket.sendto = _guarded_sendto
+if _REAL_SENDMSG is not None:
+    socket.socket.sendmsg = _guarded_sendmsg
+socket.create_connection = _blocked
+for _resolver in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getnameinfo"):
+    setattr(socket, _resolver, _blocked)
+
+# Snapshot of what was installed at conftest import, before any backend import, so a test
+# can prove the guards did not move into a later fixture.
+GUARDS_AT_IMPORT = {
+    "socket.connect": socket.socket.connect,
+    "socket.connect_ex": socket.socket.connect_ex,
+    "socket.sendto": socket.socket.sendto,
+    "socket.sendmsg": getattr(socket.socket, "sendmsg", None),
+    "create_connection": socket.create_connection,
+    "getaddrinfo": socket.getaddrinfo,
+    "gethostbyname": socket.gethostbyname,
+    "gethostbyname_ex": socket.gethostbyname_ex,
+    "gethostbyaddr": socket.gethostbyaddr,
+    "getnameinfo": socket.getnameinfo,
+}
+BACKEND_LOADED_AT_GUARD_TIME = sorted(m for m in sys.modules if m == "backend" or m.startswith("backend."))
+
+# Path retargeting at import, before any test module imports `backend`.
+import backend.claims as _claims  # noqa: E402
+import backend.config as _config  # noqa: E402
+import backend.main as _main  # noqa: E402
+import backend.roundtable as _roundtable  # noqa: E402
+import backend.settings as _settings  # noqa: E402
+import backend.storage as _storage  # noqa: E402
+
+_CONVERSATIONS = ISOLATED_DATA_DIR / "conversations"
+_config.DATA_DIR = str(_CONVERSATIONS)
+_config.DEBUG_PROMPTS_DIR = str(ISOLATED_DATA_DIR / "debug" / "prompts")
+_storage.DATA_DIR = str(_CONVERSATIONS)
+_storage.RUNS_DIR = ISOLATED_DATA_DIR / "runs"
+_settings.SETTINGS_FILE = ISOLATED_DATA_DIR / "settings.json"
+_roundtable.DEBUG_DIR = ISOLATED_DATA_DIR / "debug" / "prompts"
+_main.MODE_SESSIONS_DIR = ISOLATED_DATA_DIR / "mode_sessions"
+_CLAIMS_DIR = ISOLATED_DATA_DIR / "claims"
+_claims.DATA_DIR = ISOLATED_DATA_DIR
+_claims.CLAIMS_DIR = _CLAIMS_DIR
+_claims.CLAIMS_FILE = _CLAIMS_DIR / "claims.json"
+_claims.LOCK_FILE = _CLAIMS_DIR / "claims.json.lock"
+_claims.HISTORY_DIR = _CLAIMS_DIR / "history"
 
 
 # Mock response generator for deterministic testing

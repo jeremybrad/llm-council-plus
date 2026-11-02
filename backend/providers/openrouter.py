@@ -13,12 +13,10 @@ class OpenRouterProvider(LLMProvider):
     async def query(
         self, model_id: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
     ) -> dict[str, Any]:
-        # Strip internal prefix if present
-        if model_id.startswith("openrouter:"):
-            model_id = model_id.replace("openrouter:", "", 1)
-
-        # OpenRouter module handles key retrieval internally
-        return await openrouter.query_model(model_id, messages, timeout, temperature)
+        # Defense in depth: council.query_model already refuses this route. OpenRouter is
+        # metered, and neither an enabled flag nor a stored key authorizes paid inference
+        # under the $0 budget (WOR-362), so this layer refuses unconditionally as well.
+        return {"error": True, "error_message": openrouter.METERED_REFUSAL}
 
     async def get_models(self) -> list[dict[str, Any]]:
         # We can reuse the existing endpoint logic or implement a direct fetch here

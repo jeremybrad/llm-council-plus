@@ -52,6 +52,9 @@ async def test_stream_preserves_call_accounting(monkeypatch, terminal, terminal_
             chairman_model="agentcli:claude",
             roundtable_num_rounds=1,
             roundtable_max_parallel=2,
+            # WOR-1016 preflight: seats must name an enabled provider before dispatch.
+            enabled_providers={"agentcli": True},
+            direct_provider_toggles={},
         ),
     )
     monkeypatch.setattr(main.storage, "get_conversation", lambda _: {"messages": [{"role": "user"}]})

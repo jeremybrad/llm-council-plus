@@ -33,6 +33,15 @@ from backend.openai_compat import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _allow_synthetic_mock_routes(monkeypatch):
+    """These plumbing tests use synthetic `mock:` model IDs, which the WOR-1016
+    fail-closed route preflight correctly refuses. Route refusal itself is
+    covered against the real preflight in tests/test_wor1016_outcome_and_routing.py.
+    """
+    monkeypatch.setattr("backend.openai_compat.preflight_roundtable_models", lambda *a, **k: [])
+
+
 class TestRequestParsing:
     """Test parsing of OpenAI-format requests."""
 

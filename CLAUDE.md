@@ -329,8 +329,13 @@ The backend provides an OpenAI-compatible API at `/v1/chat/completions` that all
 | `roundtable` | 3 | Default deliberation |
 | `roundtable:fast` | 1 | Quick responses |
 | `roundtable:thorough` | 3 | Standard depth |
-| `roundtable:deep` | 5 | Extended deliberation |
-| `roundtable:N` | N | Custom round count |
+| `roundtable:deep` | 3 (requested 5) | Requests more rounds; executes the 3 implemented rounds |
+| `roundtable:N` | min(N, 3) | Custom round count, capped at 3 |
+
+The engine implements three rounds (opening, critique, revision). Any request above 3 is capped
+**before** call prediction and budgeting. The run records `requested_rounds` (what was asked),
+`planned_rounds` (after the cap) and `executed_rounds` (what actually ran, e.g. 1 after a quorum
+stop, 0 after a budget rejection) (WOR-1016).
 
 ### Request Parameters (via extra_body)
 
@@ -488,6 +493,64 @@ Seats resolve only C010 `scripts/agent_launch/{claude,grok,codex}-subscription` 
 | `agentcli:codex` | `codex-subscription` | `login status` reports a positive ChatGPT login banner (not `Not logged in…`) | `exec --json --sandbox read-only --ephemeral --skip-git-repo-check -` (stdin). Uses the **installed CLI default model**; no unverified `-m` pin |
 
 `enabled_providers.agentcli` defaults **false**. That is an implemented seat, not an enabled production setting. Cancellation and timeout kill the child process group. No metered fallback.
+
+### Model routing is fail-closed (WOR-362 / WOR-1016)
+
+Every model ID must name an explicit, known provider prefix (`ollama:`, `agentcli:`, ...) whose
+provider is enabled in settings. Blank, unprefixed and unknown-prefix IDs are refused; there is no
+automatic OpenRouter fallback. `council.query_model` refuses a route without contacting any
+provider, `OpenRouterProvider` also refuses while `enabled_providers.openrouter` is false, and the
+default for `openrouter` is now **false**. Roundtable entry points (UI SSE and `/v1`) run
+`preflight_roundtable_models` and refuse blank seat, moderator or chair configurations before any
+call. A stored key or an enabled flag is configuration, not spending authority: under the
+operator's $0 metered-model budget, every API-key-backed route (`openrouter`, `openai`,
+`anthropic`, `google`, `mistral`, `deepseek`, `groq`, and `custom`, whose billing cannot be
+verified) is refused **unconditionally**, whatever the settings say. There is no paid-provider
+exception in code. The remaining inference routes are local `ollama` and the guarded subscription
+`agentcli` seats, each only when enabled. `council.get_provider_for_model` also refuses metered
+providers. A static test asserts that the only reference to a `.query` attribute (or
+`getattr(..., "query")`) anywhere in `backend/` is inside `council.query_model`, so no other
+backend code calls a provider's `query()`; the provider objects (including the metered classes,
+which still hold their upstream HTTP `query()` code) remain in `council.PROVIDERS`. Every
+provider's `validate_key` uses a model-list GET request, not inference (the Anthropic check lists
+models instead of sending a message); `openrouter.query_model` no longer contains an HTTP
+implementation.
+Whether Ollama Cloud models routed through a local Ollama daemon count as metered is an open
+WOR-362 question and is not decided here.
+
+### Roundtable run outcome (WOR-1016)
+
+A run ends with one of `completed`, `degraded`, `failed`, `aborted` or `budget_exceeded`:
+
+- **completed**: every seat call succeeded and the chair returned content.
+- **degraded**: the chair answered, but a seat or the moderator failed (`failed_seats`, `failure_reason`).
+- **failed**: no seat succeeded in round 1 (quorum stop: later rounds, moderator and chair are
+  skipped), or the chair failed or returned nothing.
+
+Seat, moderator and chair error reasons, and every failed call-ledger attempt, carry a non-empty
+reason (cancelled attempts record `cancelled`). Aborted runs record a `failure_reason`. Only
+`completed` and `degraded` runs with a chair answer are turn-captured (gated in `main.py` and again
+in `turn_capture.capture_run`); captured turns carry `run_status`, `failed_seats` and
+`failure_reason`. The timeline shows Degraded/Failed/Budget-rejected badges.
+
+`/v1` never presents a non-answer as a successful completion. A route refused by the preflight is
+HTTP 400 (`roundtable_refused`) on both the streaming and non-streaming paths, checked before the
+response starts; so is a request with no (or only whitespace) user message or fewer than 2
+council models.
+Non-streaming: a failed council, a blank or whitespace chair answer (reported as `failed` whatever
+status the run recorded), an aborted run, or an engine
+run that ends without a terminal answer is HTTP 502; a budget rejection is HTTP 429; an engine
+exception is HTTP 500. Each has an OpenAI-style `error` body carrying `failure_reason`. Streaming
+cannot change status once started, so those cases emit an explicit notice instead. Degraded answers
+are prefixed with a notice.
+
+Tests isolate themselves at conftest import, which pytest performs before importing any test
+module. The network guard is installed first, then `backend` is imported and its data, settings,
+debug, mode-session and claims paths are pointed at a disposable root; SADB_DATA_DIR points there
+too and metered key environment variables are removed. Non-UNIX socket `connect`, `connect_ex`,
+`sendto` and `sendmsg` raise, as do `create_connection`, `getaddrinfo`, `gethostbyname`,
+`gethostbyname_ex`, `gethostbyaddr` and `getnameinfo`. A test checks the guards recorded at
+conftest import, not only their state at test time.
 
 ### Roundtable call budget (WOR-402)
 

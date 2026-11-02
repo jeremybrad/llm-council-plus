@@ -34,23 +34,122 @@ PROVIDERS = {
 }
 
 
-def get_provider_for_model(model_id: str) -> Any:
-    """Determine the provider for a given model ID."""
-    if ":" in model_id:
-        provider_name = model_id.split(":")[0]
-        if provider_name in PROVIDERS:
-            return PROVIDERS[provider_name]
+# Providers whose enablement is the "direct" master toggle plus a per-provider toggle.
+DIRECT_PROVIDERS = frozenset({"openai", "anthropic", "google", "mistral", "deepseek"})
 
-    # Default to OpenRouter for unprefixed models (legacy support)
-    return PROVIDERS["openrouter"]
+# API-key-backed (metered or billing-unverifiable) inference routes. The operator's
+# standing metered-model budget is $0: an enabled flag or a stored key is
+# configuration, never spending authority, so these are refused unconditionally.
+# There is no paid-provider exception in code (WOR-362 / WOR-1016). `custom` is
+# included because an arbitrary OpenAI-compatible endpoint's billing cannot be
+# verified. Remaining routes: local `ollama` and the guarded subscription `agentcli`.
+METERED_API_PROVIDERS = frozenset(
+    {"openrouter", "openai", "anthropic", "google", "mistral", "deepseek", "groq", "custom"}
+)
+
+
+class ModelRouteError(ValueError):
+    """A model ID cannot be routed to an enabled provider (fail closed)."""
+
+
+def _provider_name(model_id: Any) -> str:
+    """Return the explicit provider prefix of a model ID, or raise ModelRouteError.
+
+    There is no fallback: blank, unprefixed and unknown-prefix IDs are refused
+    rather than routed to a default provider (WOR-362 / WOR-1016).
+    """
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ModelRouteError("model id is blank")
+    model_id = model_id.strip()
+    if ":" not in model_id:
+        raise ModelRouteError(f"model id {model_id!r} has no provider prefix")
+    provider_name, model_name = model_id.split(":", 1)
+    if provider_name not in PROVIDERS:
+        raise ModelRouteError(f"model id {model_id!r} has unknown provider prefix {provider_name!r}")
+    if not model_name.strip():
+        raise ModelRouteError(f"model id {model_id!r} has no model name after the provider prefix")
+    return provider_name
+
+
+def provider_enabled(provider_name: str, settings: Any) -> bool:
+    """Whether settings enable a provider. Missing or malformed settings mean disabled."""
+    enabled = getattr(settings, "enabled_providers", None) or {}
+    if not isinstance(enabled, dict):
+        return False
+    if provider_name in DIRECT_PROVIDERS:
+        toggles = getattr(settings, "direct_provider_toggles", None) or {}
+        return enabled.get("direct") is True and isinstance(toggles, dict) and toggles.get(provider_name) is True
+    return enabled.get(provider_name) is True
+
+
+def check_model_route(model_id: Any, settings: Any = None) -> str | None:
+    """Return None if the model may be dispatched, else a human-readable refusal reason."""
+    try:
+        provider_name = _provider_name(model_id)
+    except ModelRouteError as e:
+        return str(e)
+    if provider_name in METERED_API_PROVIDERS:
+        return (
+            f"provider {provider_name!r} is a metered API route; refused under the $0 "
+            "metered-model budget (an enabled flag or stored key is not spending authority)"
+        )
+    if settings is None:
+        settings = get_settings()
+    if not provider_enabled(provider_name, settings):
+        return f"provider {provider_name!r} is disabled in settings"
+    return None
+
+
+def preflight_roundtable_models(
+    council_models: list[Any], moderator_model: Any, chair_model: Any, settings: Any = None
+) -> list[str]:
+    """Validate every seat, moderator and chair route before any dispatch.
+
+    Returns a list of refusal reasons (empty when the configuration may run).
+    """
+    if settings is None:
+        settings = get_settings()
+    problems: list[str] = []
+    if not isinstance(council_models, list) or len(council_models) < 2:
+        problems.append("roundtable requires at least 2 council models")
+        council_models = council_models if isinstance(council_models, list) else []
+    for i, model in enumerate(council_models, start=1):
+        reason = check_model_route(model, settings)
+        if reason:
+            problems.append(f"council seat {i}: {reason}")
+    for role, model in (("moderator", moderator_model), ("chair", chair_model)):
+        reason = check_model_route(model, settings)
+        if reason:
+            problems.append(f"{role}: {reason}")
+    return problems
+
+
+def get_provider_for_model(model_id: str) -> Any:
+    """Determine the provider for a model ID. Raises ModelRouteError; never falls back.
+
+    Metered API providers are refused here too (defense in depth behind check_model_route),
+    so this lookup never returns a metered provider. The provider objects themselves still
+    live in PROVIDERS; dispatch goes only through query_model, which a static test pins.
+    """
+    name = _provider_name(model_id)
+    if name in METERED_API_PROVIDERS:
+        raise ModelRouteError(f"provider '{name}' is a metered API route; refused under the $0 metered-model budget")
+    return PROVIDERS[name]
 
 
 async def query_model(
     model: str, messages: list[dict[str, str]], timeout: float = 120.0, temperature: float = 0.7
 ) -> dict[str, Any]:
-    """Dispatch query to appropriate provider."""
+    """Dispatch query to the model's explicitly named, enabled provider.
+
+    Refused routes return the provider error convention without contacting any provider.
+    """
+    reason = check_model_route(model)
+    if reason:
+        logger.warning("Refused model route: %s", reason)
+        return {"error": True, "error_message": f"route refused: {reason}"}
     provider = get_provider_for_model(model)
-    return await provider.query(model, messages, timeout, temperature)
+    return await provider.query(model.strip(), messages, timeout, temperature)
 
 
 async def query_models_parallel(models: list[str], messages: list[dict[str, str]]) -> dict[str, Any]:
