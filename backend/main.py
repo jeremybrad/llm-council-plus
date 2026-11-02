@@ -1549,6 +1549,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                     "message": "Roundtable refused before any model call: " + "; ".join(route_problems),
                     "type": "roundtable_refused",
                     "code": "route_refused",
+                    "failure_reason": "; ".join(route_problems),
                 }
             },
         )
@@ -1573,6 +1574,7 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
                         "message": e.message,
                         "type": e.error_type,
                         "code": e.outcome.get("status") or "failed",
+                        "failure_reason": e.outcome.get("failure_reason") or e.message,
                         "failed_seats": e.outcome.get("failed_seats", []),
                     }
                 },

@@ -34,7 +34,7 @@ Jeremy's ruling on WOR-362: reject blank, unprefixed and unknown routes, with no
 - sets `SADB_DATA_DIR` and `SADB_CLI_PATH` to a disposable root;
 - removes metered key environment variables;
 - points the data, settings, debug, mode-session and claims paths at that root;
-- blocks non-UNIX socket connections and DNS.
+- blocks non-UNIX socket connect and send calls, `create_connection`, and the resolver functions (`getaddrinfo`, `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`, `getnameinfo`).
 
 ## Explicitly enabled metered routes (WOR-362 follow-up, same PR)
 
@@ -68,6 +68,18 @@ The repairs:
 - **Capture:** it also requires a chair answer and stamps `failure_reason`.
 - **Import-time isolation:** it now really happens at conftest import (network guard first). It extends the key scrub and the `sendto`/`sendmsg` guard.
 - **Tests:** added for each repair.
+
+## Round-2 independent review (guarded hermetic Grok, grok-4.7, head `93495cc`)
+
+The reviewer confirmed the round-1 repairs and raised 8 findings (R2-F1..F8). R2-F1 was rejected: `CallAccountant.close_open` already records `cancelled` for in-flight moderator and chair attempts; its missing test was adopted under R2-F8. The other 7 were adopted:
+- **Blank chair answers on `/v1` (F2):** a whitespace or `null` chair answer is a failure (502, or a streaming failure notice), not a 200.
+- **Request-shape refusals (F3, F4):** no user message, or fewer than 2 council models, is HTTP 400 at the route. The non-streaming generator raises a 400 `RoundtableFailedError` for its own preflight instead of returning a 200 "Error" answer. An engine run that ends without a terminal answer is 502 (`roundtable_incomplete`), or a streaming failure notice; the "No response generated." 200 fallback is gone.
+- **Reasons in error bodies (F5):** `/v1` error bodies carry `failure_reason`; the budget rejection keeps the run's reason.
+- **Defense in depth (F6):** `get_provider_for_model` refuses metered providers, and a static AST test asserts `council.query_model` is the only caller of a provider `query()`.
+- **Docs and dead code (F7):** the remaining OpenRouter inference body was removed; the resolver guards were extended; docs state the guarantees precisely.
+- **Test strength (F8):** the import-time isolation test now checks the guards recorded at conftest import, the full key-scrub list and `sendto`/`connect_ex` on an INET socket; the OpenRouter spy also covers `httpx.AsyncClient.send`; moderator and chair cancellation are tested.
+
+19 of the new tests failed against `93495cc` with the new conftest (RED); all pass at the repair head.
 
 ## Evidence
 

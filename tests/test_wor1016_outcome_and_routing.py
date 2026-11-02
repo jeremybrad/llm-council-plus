@@ -134,7 +134,7 @@ async def test_query_model_refuses_without_contacting_any_provider(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_openrouter_provider_refuses_when_disabled(monkeypatch):
+async def test_openrouter_provider_refuses_even_with_stored_key(monkeypatch):
     inner = AsyncMock(return_value={"content": "should not happen"})
     monkeypatch.setattr("backend.providers.openrouter.openrouter.query_model", inner)
     monkeypatch.setattr(
@@ -227,7 +227,10 @@ async def test_v1_refuses_unknown_route_before_dispatch(monkeypatch, stream):
     if stream:
         text = "".join([chunk async for chunk in openai_compat.generate_openai_stream(request)])
     else:
-        text = (await openai_compat.generate_non_streaming_response(request)).choices[0].message.content
+        with pytest.raises(openai_compat.RoundtableFailedError) as exc:
+            await openai_compat.generate_non_streaming_response(request)
+        assert exc.value.status_code == 400
+        text = exc.value.message
     assert "refused before any model call" in text
     assert "unknown provider prefix 'antigravity'" in text
     roundtable.assert_not_called()
@@ -660,7 +663,9 @@ async def test_openrouter_layers_refuse_even_when_enabled_with_key(monkeypatch):
     from backend import openrouter as openrouter_module
 
     post = AsyncMock(side_effect=AssertionError("no HTTP request may be made"))
+    send = AsyncMock(side_effect=AssertionError("no HTTP request may be made"))
     monkeypatch.setattr("httpx.AsyncClient.post", post)
+    monkeypatch.setattr("httpx.AsyncClient.send", send)
     enabled = SimpleNamespace(enabled_providers={"openrouter": True}, openrouter_api_key="stored-key")
     monkeypatch.setattr("backend.providers.openrouter.get_settings", lambda: enabled)
     monkeypatch.setattr(openrouter_module, "get_openrouter_api_key", lambda: "stored-key")
@@ -670,6 +675,7 @@ async def test_openrouter_layers_refuse_even_when_enabled_with_key(monkeypatch):
     assert provider_result["error"] is True and "metered" in provider_result["error_message"]
     assert module_result["error"] is True and "metered" in module_result["error_message"]
     post.assert_not_awaited()
+    send.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -710,12 +716,38 @@ async def test_anthropic_key_check_makes_no_inference_request(monkeypatch):
 def test_isolation_is_installed_at_conftest_import():
     from tests import conftest
 
-    assert socket.getaddrinfo is conftest._blocked
-    assert socket.create_connection is conftest._blocked
+    # Installed at conftest import, before any backend module was loaded.
+    assert conftest.BACKEND_LOADED_AT_GUARD_TIME == []
+    snap = conftest.GUARDS_AT_IMPORT
+    assert snap["socket.connect"] is conftest._guarded_connect
+    assert snap["socket.connect_ex"] is conftest._guarded_connect_ex
+    assert snap["socket.sendto"] is conftest._guarded_sendto
+    if snap["socket.sendmsg"] is not None:
+        assert snap["socket.sendmsg"] is conftest._guarded_sendmsg
+    for name in (
+        "create_connection",
+        "getaddrinfo",
+        "gethostbyname",
+        "gethostbyname_ex",
+        "gethostbyaddr",
+        "getnameinfo",
+    ):
+        assert snap[name] is conftest._blocked, name
+        assert getattr(socket, name) is conftest._blocked, name
     with pytest.raises(NetworkBlockedError):
         socket.getaddrinfo("example.com", 443)
-    for name in ("MISTRAL_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY"):
-        assert name not in os.environ
+    with pytest.raises(NetworkBlockedError):
+        socket.gethostbyname("example.com")
+    for name in conftest.SCRUBBED_KEY_ENV_VARS:
+        assert name not in os.environ, name
+
+
+def test_inet_sockets_cannot_send():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        with pytest.raises(NetworkBlockedError):
+            udp.sendto(b"x", ("127.0.0.1", 9))
+        with pytest.raises(NetworkBlockedError):
+            udp.connect_ex(("127.0.0.1", 9))
 
 
 @pytest.mark.asyncio
@@ -929,3 +961,153 @@ async def test_ui_stream_stores_empty_dict_when_chair_final_null(monkeypatch):
 
     _, mocks, _ = await _collect_main_stream(monkeypatch, _ui_settings(), fake)
     assert mocks["add_roundtable_message"].call_args.kwargs["chair_final"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review repairs (R2-F2..F8).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["mock:moderator", "mock:chair"])
+async def test_cancel_during_moderator_or_chair_records_cancelled(model):
+    import asyncio
+
+    started = asyncio.Event()
+
+    async def fake(m, messages, timeout=120.0, temperature=0.5):
+        if m == model:
+            started.set()
+            await asyncio.sleep(30)
+        return {"content": "ok"}
+
+    events = []
+
+    async def drive():
+        with (
+            patch("backend.roundtable.query_model", fake),
+            patch("backend.roundtable.get_settings", return_value=_rt_settings()),
+        ):
+            async for e in run_roundtable(
+                conversation_id="c",
+                question="q",
+                agents=_agents(2),
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=1,
+            ):
+                events.append(e)
+
+    task = asyncio.create_task(drive())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    run = events[-1]["run"]
+    assert events[-1]["type"] == "roundtable_aborted" and run["status"] == "aborted"
+    assert run["failure_reason"]
+    attempt = [a for a in run["call_accounting"]["attempts"] if a["model"] == model][-1]
+    assert attempt["failed"] and attempt["error_message"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["   ", "\n\t", None])
+async def test_v1_blank_chair_answer_is_never_success(monkeypatch, content):
+    run = _run_dict("completed")
+    run["chair_final"] = {"model": "ollama:c", "content": content, "error": False}
+    event = {"type": "chair_complete", "chair_final": run["chair_final"], "run": run}
+    response = await _route(monkeypatch, _v1_settings(), _terminal(event))
+    assert response.status_code == 502
+    assert "choices" not in json.loads(response.body)
+    text = "".join([c async for c in openai_compat.generate_openai_stream(_v1_request(True))])
+    assert "Roundtable failed" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_v1_route_request_shape_refusals_are_http_400(monkeypatch, stream):
+    roundtable = Mock(side_effect=AssertionError("must not start"))
+    monkeypatch.setattr(openai_compat, "run_roundtable", roundtable)
+    no_user = openai_compat.ChatCompletionRequest(
+        model="roundtable", messages=[openai_compat.ChatMessage(role="system", content="s")], stream=stream
+    )
+    monkeypatch.setattr(openai_compat, "get_settings", _v1_settings)
+    response = await main.openai_chat_completions(no_user, SimpleNamespace())
+    assert response.status_code == 400 and "no user message" in json.loads(response.body)["error"]["message"]
+
+    one_seat = SimpleNamespace(**{**vars(_v1_settings()), "council_models": ["ollama:a"]})
+    monkeypatch.setattr(openai_compat, "get_settings", lambda: one_seat)
+    response = await main.openai_chat_completions(_v1_request(stream), SimpleNamespace())
+    assert response.status_code == 400 and "at least 2 council models" in json.loads(response.body)["error"]["message"]
+    roundtable.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_v1_generator_preflight_raises_for_direct_callers(monkeypatch):
+    bad = SimpleNamespace(**{**vars(_v1_settings()), "council_models": ["ollama:a", "openai:gpt-4o"]})
+    monkeypatch.setattr(openai_compat, "get_settings", lambda: bad)
+    monkeypatch.setattr(openai_compat, "run_roundtable", Mock(side_effect=AssertionError("must not start")))
+    with pytest.raises(openai_compat.RoundtableFailedError) as exc:
+        await openai_compat.generate_non_streaming_response(_v1_request(False))
+    assert exc.value.status_code == 400 and exc.value.error_type == "roundtable_refused"
+
+
+@pytest.mark.asyncio
+async def test_v1_no_terminal_event_is_an_error(monkeypatch):
+    async def silent(**kwargs):
+        yield {"type": "roundtable_init", "total_rounds": 1, "council_members": [{}, {}]}
+
+    response = await _route(monkeypatch, _v1_settings(), silent)
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"]["type"] == "roundtable_incomplete"
+    text = "".join([c async for c in openai_compat.generate_openai_stream(_v1_request(True))])
+    assert "Roundtable failed: the roundtable ended without an answer" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "reason"),
+    [
+        (
+            {
+                "type": "roundtable_budget_exceeded",
+                "predicted_calls": 22,
+                "max_calls_per_run": 14,
+                "run": {"status": "budget_exceeded", "failure_reason": "predicted 22 calls exceed cap"},
+            },
+            "predicted 22 calls exceed cap",
+        ),
+        (
+            {"type": "roundtable_budget_exceeded", "predicted_calls": 22, "max_calls_per_run": 14},
+            "roundtable_max_calls_per_run=14",
+        ),
+        ({"type": "roundtable_aborted", "run": _run_dict("aborted")}, "aborted reason"),
+        ({"type": "roundtable_failed", "run": _run_dict("failed")}, "failed reason"),
+    ],
+)
+async def test_v1_error_bodies_carry_failure_reason(monkeypatch, event, reason):
+    response = await _route(monkeypatch, _v1_settings(), _terminal(event))
+    assert reason in json.loads(response.body)["error"]["failure_reason"]
+
+
+@pytest.mark.parametrize("provider", sorted(council.METERED_API_PROVIDERS))
+def test_get_provider_for_model_refuses_metered(provider):
+    with pytest.raises(council.ModelRouteError, match="metered"):
+        council.get_provider_for_model(f"{provider}:some-model")
+
+
+def test_provider_query_is_dispatched_from_one_place_only():
+    """Static guard: council.query_model is the only caller of a provider's .query()."""
+    import ast
+
+    backend_dir = Path(council.__file__).parent
+    callers = []
+    for path in sorted(backend_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "query":
+                    callers.append(f"{path.relative_to(backend_dir)}:{fn.name}")
+    assert sorted(set(callers)) == ["council.py:query_model"]

@@ -2,6 +2,7 @@
 
 import os
 import socket
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ ISOLATED_SADB_ROOT = ISOLATION_ROOT / "sadb"
 ISOLATED_DATA_DIR = ISOLATION_ROOT / "data"
 os.environ["SADB_DATA_DIR"] = str(ISOLATED_SADB_ROOT)
 os.environ["SADB_CLI_PATH"] = str(ISOLATION_ROOT / "no-sadb-cli")
-for _name in (
+SCRUBBED_KEY_ENV_VARS = (
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -33,7 +34,8 @@ for _name in (
     "DEEPSEEK_API_KEY",
     "XAI_API_KEY",
     "GROK_API_KEY",
-):
+)
+for _name in SCRUBBED_KEY_ENV_VARS:
     os.environ.pop(_name, None)
 
 
@@ -86,7 +88,24 @@ socket.socket.sendto = _guarded_sendto
 if _REAL_SENDMSG is not None:
     socket.socket.sendmsg = _guarded_sendmsg
 socket.create_connection = _blocked
-socket.getaddrinfo = _blocked
+for _resolver in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getnameinfo"):
+    setattr(socket, _resolver, _blocked)
+
+# Snapshot of what was installed at conftest import, before any backend import, so a test
+# can prove the guards did not move into a later fixture.
+GUARDS_AT_IMPORT = {
+    "socket.connect": socket.socket.connect,
+    "socket.connect_ex": socket.socket.connect_ex,
+    "socket.sendto": socket.socket.sendto,
+    "socket.sendmsg": getattr(socket.socket, "sendmsg", None),
+    "create_connection": socket.create_connection,
+    "getaddrinfo": socket.getaddrinfo,
+    "gethostbyname": socket.gethostbyname,
+    "gethostbyname_ex": socket.gethostbyname_ex,
+    "gethostbyaddr": socket.gethostbyaddr,
+    "getnameinfo": socket.getnameinfo,
+}
+BACKEND_LOADED_AT_GUARD_TIME = sorted(m for m in sys.modules if m == "backend" or m.startswith("backend."))
 
 # Path retargeting at import, before any test module imports `backend`.
 import backend.claims as _claims  # noqa: E402

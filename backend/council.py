@@ -125,8 +125,15 @@ def preflight_roundtable_models(
 
 
 def get_provider_for_model(model_id: str) -> Any:
-    """Determine the provider for a model ID. Raises ModelRouteError; never falls back."""
-    return PROVIDERS[_provider_name(model_id)]
+    """Determine the provider for a model ID. Raises ModelRouteError; never falls back.
+
+    Metered API providers are refused here too (defense in depth behind check_model_route),
+    so no caller can obtain a metered provider object for dispatch.
+    """
+    name = _provider_name(model_id)
+    if name in METERED_API_PROVIDERS:
+        raise ModelRouteError(f"provider '{name}' is a metered API route; refused under the $0 metered-model budget")
+    return PROVIDERS[name]
 
 
 async def query_model(

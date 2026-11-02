@@ -507,8 +507,12 @@ operator's $0 metered-model budget, every API-key-backed route (`openrouter`, `o
 `anthropic`, `google`, `mistral`, `deepseek`, `groq`, and `custom`, whose billing cannot be
 verified) is refused **unconditionally**, whatever the settings say. There is no paid-provider
 exception in code. The remaining inference routes are local `ollama` and the guarded subscription
-`agentcli` seats, each only when enabled. Provider key checks never perform inference; the
-Anthropic check lists models instead of sending a message. Model-list requests are not inference.
+`agentcli` seats, each only when enabled. `council.get_provider_for_model` also refuses metered
+providers, and `council.query_model` is the only caller of a provider's `query()` (enforced by a
+static test). Every provider's `validate_key` uses a model-list GET request, not inference (the
+Anthropic check lists models instead of sending a message); `openrouter.query_model` no longer
+contains an HTTP implementation. Provider classes still hold direct HTTP code for their own
+`query()`, reachable only through `query_model`.
 Whether Ollama Cloud models routed through a local Ollama daemon count as metered is an open
 WOR-362 question and is not decided here.
 
@@ -529,15 +533,20 @@ in `turn_capture.capture_run`); captured turns carry `run_status`, `failed_seats
 
 `/v1` never presents a non-answer as a successful completion. A route refused by the preflight is
 HTTP 400 (`roundtable_refused`) on both the streaming and non-streaming paths, checked before the
-response starts. Non-streaming: a failed council or aborted run is HTTP 502, a budget rejection is
-HTTP 429, an engine exception is HTTP 500, each with an OpenAI-style `error` body. Streaming cannot
-change status once started, so a failed council, budget rejection or abort emits an explicit notice.
-Degraded answers are prefixed with a notice.
+response starts; so is a request with no user message or fewer than 2 council models.
+Non-streaming: a failed council, a blank or whitespace chair answer, an aborted run, or an engine
+run that ends without a terminal answer is HTTP 502; a budget rejection is HTTP 429; an engine
+exception is HTTP 500. Each has an OpenAI-style `error` body carrying `failure_reason`. Streaming
+cannot change status once started, so those cases emit an explicit notice instead. Degraded answers
+are prefixed with a notice.
 
 Tests isolate themselves at conftest import, which pytest performs before importing any test
-module: SADB_DATA_DIR, data, settings, debug, mode-session and claims paths point at a disposable
-root, metered key environment variables are removed, and non-UNIX socket connect/send and DNS are
-blocked.
+module. The network guard is installed first, then `backend` is imported and its data, settings,
+debug, mode-session and claims paths are pointed at a disposable root; SADB_DATA_DIR points there
+too and metered key environment variables are removed. Non-UNIX socket `connect`, `connect_ex`,
+`sendto` and `sendmsg` raise, as do `create_connection`, `getaddrinfo`, `gethostbyname`,
+`gethostbyname_ex`, `gethostbyaddr` and `getnameinfo`. A test checks the guards recorded at
+conftest import, not only their state at test time.
 
 ### Roundtable call budget (WOR-402)
 
