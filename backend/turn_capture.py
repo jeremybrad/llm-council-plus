@@ -321,6 +321,7 @@ def transform_run_to_turns(run_data: dict[str, Any], session_id: str) -> list[di
     for turn in turns:
         turn["meta"]["run_status"] = run_data.get("status")
         turn["meta"]["failed_seats"] = list(run_data.get("failed_seats") or [])
+        turn["meta"]["failure_reason"] = run_data.get("failure_reason")
     return turns
 
 
@@ -397,6 +398,10 @@ def capture_run(
     status = run_data.get("status") if isinstance(run_data, dict) else None
     if status not in CAPTURABLE_RUN_STATUSES:
         print(f"Turn capture skipped: run status {status!r} is not capturable")
+        return None
+    chair = run_data.get("chair_final") if isinstance(run_data.get("chair_final"), dict) else {}
+    if chair.get("error") or not str(chair.get("content") or "").strip():
+        print("Turn capture skipped: run has no chair answer")
         return None
 
     try:

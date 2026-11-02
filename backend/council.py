@@ -63,9 +63,11 @@ def _provider_name(model_id: Any) -> str:
     model_id = model_id.strip()
     if ":" not in model_id:
         raise ModelRouteError(f"model id {model_id!r} has no provider prefix")
-    provider_name = model_id.split(":", 1)[0]
+    provider_name, model_name = model_id.split(":", 1)
     if provider_name not in PROVIDERS:
         raise ModelRouteError(f"model id {model_id!r} has unknown provider prefix {provider_name!r}")
+    if not model_name.strip():
+        raise ModelRouteError(f"model id {model_id!r} has no model name after the provider prefix")
     return provider_name
 
 

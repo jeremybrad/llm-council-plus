@@ -333,8 +333,9 @@ The backend provides an OpenAI-compatible API at `/v1/chat/completions` that all
 | `roundtable:N` | min(N, 3) | Custom round count, capped at 3 |
 
 The engine implements three rounds (opening, critique, revision). Any request above 3 is capped
-**before** call prediction and budgeting; the run records `requested_rounds` and `executed_rounds`
-(WOR-1016).
+**before** call prediction and budgeting. The run records `requested_rounds` (what was asked),
+`planned_rounds` (after the cap) and `executed_rounds` (what actually ran, e.g. 1 after a quorum
+stop, 0 after a budget rejection) (WOR-1016).
 
 ### Request Parameters (via extra_body)
 
@@ -520,14 +521,23 @@ A run ends with one of `completed`, `degraded`, `failed`, `aborted` or `budget_e
 - **failed**: no seat succeeded in round 1 (quorum stop: later rounds, moderator and chair are
   skipped), or the chair failed or returned nothing.
 
-Seat, moderator and chair error reasons are never empty. Only `completed` and `degraded` runs are
-turn-captured (gated in `main.py` and again in `turn_capture.capture_run`), and captured turns carry
-`run_status`. The timeline shows Degraded/Failed/Budget-rejected badges. `/v1` labels degraded
-answers and never returns a failed council as a successful completion: non-streaming responds
-HTTP 502 with an OpenAI-style error body; streaming emits an explicit failure notice.
+Seat, moderator and chair error reasons, and every failed call-ledger attempt, carry a non-empty
+reason (cancelled attempts record `cancelled`). Aborted runs record a `failure_reason`. Only
+`completed` and `degraded` runs with a chair answer are turn-captured (gated in `main.py` and again
+in `turn_capture.capture_run`); captured turns carry `run_status`, `failed_seats` and
+`failure_reason`. The timeline shows Degraded/Failed/Budget-rejected badges.
 
-Tests isolate themselves at conftest import: disposable data/settings/`SADB_DATA_DIR`, and network
-connections are blocked.
+`/v1` never presents a non-answer as a successful completion. A route refused by the preflight is
+HTTP 400 (`roundtable_refused`) on both the streaming and non-streaming paths, checked before the
+response starts. Non-streaming: a failed council or aborted run is HTTP 502, a budget rejection is
+HTTP 429, an engine exception is HTTP 500, each with an OpenAI-style `error` body. Streaming cannot
+change status once started, so a failed council, budget rejection or abort emits an explicit notice.
+Degraded answers are prefixed with a notice.
+
+Tests isolate themselves at conftest import, which pytest performs before importing any test
+module: SADB_DATA_DIR, data, settings, debug, mode-session and claims paths point at a disposable
+root, metered key environment variables are removed, and non-UNIX socket connect/send and DNS are
+blocked.
 
 ### Roundtable call budget (WOR-402)
 

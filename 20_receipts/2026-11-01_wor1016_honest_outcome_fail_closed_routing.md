@@ -30,7 +30,7 @@ Jeremy's ruling on WOR-362: reject blank, unprefixed and unknown routes, with no
 - `/v1` labels degraded answers. A failed council produces an explicit failure notice when streaming, and HTTP 502 with an OpenAI-style error body when not.
 - The timeline shows Degraded, Failed and Budget-rejected badges, seat `error` text, and moderator and chair failure reasons.
 
-**Test isolation** (`tests/conftest.py`): at conftest import, before any `backend` import, the suite:
+**Test isolation** (`tests/conftest.py`): at conftest import, which pytest performs before importing any test module, the suite:
 - sets `SADB_DATA_DIR` and `SADB_CLI_PATH` to a disposable root;
 - removes metered key environment variables;
 - points the data, settings, debug, mode-session and claims paths at that root;
@@ -52,6 +52,23 @@ The repair:
 - Remaining routes: local `ollama` and guarded `agentcli`.
 - Open WOR-362 question, not decided here: whether Ollama Cloud models proxied by a local daemon count as metered.
 
+## Round-1 independent review (guarded hermetic Grok, grok-4.7, head `56ee2d2`)
+
+The review produced 20 findings, recorded in the PR's review-budget ledger. 18 were adopted and repaired at the next head; 2 were rejected:
+- **R1-G6:** a pre-existing duplicate-label defect, kept out of scope.
+- **R1-G13:** a by-design preflight stub in plumbing tests.
+
+The repairs:
+- **`/v1` HTTP statuses:** a preflight refusal is HTTP 400 on both paths, checked before the response starts. Non-streaming budget rejection is 429, abort and failed council are 502, and an engine exception is 500.
+- **Round counts:** the UI passes the requested round count to the engine, which records `requested_rounds`, `planned_rounds` and the actual `executed_rounds`.
+- **Non-empty reasons:** the call ledger never stores an empty failure reason, cancelled attempts record `cancelled`, and aborted runs record a reason.
+- **SSE reasons:** budget and abort SSE data carry `failure_reason`.
+- **Null chair:** a `null` chair answer is stored as `{}`.
+- **Empty model names:** a known prefix with an empty model name is refused.
+- **Capture:** it also requires a chair answer and stamps `failure_reason`.
+- **Import-time isolation:** it now really happens at conftest import (network guard first). It extends the key scrub and the `sendto`/`sendmsg` guard.
+- **Tests:** added for each repair.
+
 ## Evidence
 
 - The RED baseline at `1d70601` (same scenarios, mocks only) printed:
@@ -63,7 +80,7 @@ The repair:
   - `''`, `gpt-4o` and `antigravity:x` → `OpenRouterProvider`;
   - default `openrouter` → True;
   - capture not gated on status.
-- GREEN: 424 engine tests pass, including 55 new ones in `tests/test_wor1016_outcome_and_routing.py`. Scoped ruff check and format pass. The frontend fixture passes, including when replaying the real `main.py` SSE output. `npm run build` passes.
+- GREEN at the round-1 repair head: 469 engine tests pass, including 100 in `tests/test_wor1016_outcome_and_routing.py`; the first head (`56ee2d2`) had 424 and 55. Scoped ruff check and format pass. The frontend fixture passes, including when replaying the real `main.py` SSE output. `npm run build` passes.
 - Isolation was verified on effective paths, not just environment variables:
   - `resolve_sadb_root()` resolves to the disposable root;
   - storage, run and settings paths sit under it;

@@ -10,16 +10,30 @@ from unittest.mock import AsyncMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Test isolation (WOR-1016). Established at conftest import, before any test
-# module imports `backend`, so module-level path constants and SADB root
-# resolution can never point at real operator data, settings or credentials.
+# Test isolation (WOR-1016). Everything below runs at conftest import, which pytest
+# performs before collecting (importing) any test module, so module-level path
+# constants, SADB root resolution and sockets can never reach real operator data,
+# settings, credentials or the network. Values are assigned directly (not via a
+# fixture) and stay in force for the whole session; per-test monkeypatches layer
+# on top and restore to these isolated values.
 # ---------------------------------------------------------------------------
 ISOLATION_ROOT = Path(tempfile.mkdtemp(prefix="llm-council-tests-")).resolve()
 ISOLATED_SADB_ROOT = ISOLATION_ROOT / "sadb"
 ISOLATED_DATA_DIR = ISOLATION_ROOT / "data"
 os.environ["SADB_DATA_DIR"] = str(ISOLATED_SADB_ROOT)
 os.environ["SADB_CLI_PATH"] = str(ISOLATION_ROOT / "no-sadb-cli")
-for _name in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"):
+for _name in (
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "GROK_API_KEY",
+):
     os.environ.pop(_name, None)
 
 
@@ -33,51 +47,69 @@ def _blocked(*_args, **_kwargs):
 
 _REAL_CONNECT = socket.socket.connect
 _REAL_CONNECT_EX = socket.socket.connect_ex
+_REAL_SENDTO = socket.socket.sendto
+_REAL_SENDMSG = getattr(socket.socket, "sendmsg", None)
+
+
+def _is_unix(sock) -> bool:
+    return sock.family == getattr(socket, "AF_UNIX", None)
 
 
 def _guarded_connect(self, address):
-    if self.family == getattr(socket, "AF_UNIX", None):
+    if _is_unix(self):
         return _REAL_CONNECT(self, address)
     _blocked()
 
 
 def _guarded_connect_ex(self, address):
-    if self.family == getattr(socket, "AF_UNIX", None):
+    if _is_unix(self):
         return _REAL_CONNECT_EX(self, address)
     _blocked()
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _isolated_runtime():
-    """Point every backend data path at a disposable root and block network I/O."""
-    import backend.claims as claims
-    import backend.config as config
-    import backend.main as main
-    import backend.roundtable as roundtable
-    import backend.settings as settings
-    import backend.storage as storage
+def _guarded_sendto(self, *args):
+    if _is_unix(self):
+        return _REAL_SENDTO(self, *args)
+    _blocked()
 
-    mp = pytest.MonkeyPatch()
-    conversations = ISOLATED_DATA_DIR / "conversations"
-    mp.setattr(config, "DATA_DIR", str(conversations))
-    mp.setattr(config, "DEBUG_PROMPTS_DIR", str(ISOLATED_DATA_DIR / "debug" / "prompts"))
-    mp.setattr(storage, "DATA_DIR", str(conversations))
-    mp.setattr(storage, "RUNS_DIR", ISOLATED_DATA_DIR / "runs")
-    mp.setattr(settings, "SETTINGS_FILE", ISOLATED_DATA_DIR / "settings.json")
-    mp.setattr(roundtable, "DEBUG_DIR", ISOLATED_DATA_DIR / "debug" / "prompts")
-    mp.setattr(main, "MODE_SESSIONS_DIR", ISOLATED_DATA_DIR / "mode_sessions")
-    claims_dir = ISOLATED_DATA_DIR / "claims"
-    mp.setattr(claims, "DATA_DIR", ISOLATED_DATA_DIR)
-    mp.setattr(claims, "CLAIMS_DIR", claims_dir)
-    mp.setattr(claims, "CLAIMS_FILE", claims_dir / "claims.json")
-    mp.setattr(claims, "LOCK_FILE", claims_dir / "claims.json.lock")
-    mp.setattr(claims, "HISTORY_DIR", claims_dir / "history")
-    mp.setattr(socket.socket, "connect", _guarded_connect)
-    mp.setattr(socket.socket, "connect_ex", _guarded_connect_ex)
-    mp.setattr(socket, "create_connection", _blocked)
-    mp.setattr(socket, "getaddrinfo", _blocked)
-    yield
-    mp.undo()
+
+def _guarded_sendmsg(self, *args):
+    if _is_unix(self) and _REAL_SENDMSG is not None:
+        return _REAL_SENDMSG(self, *args)
+    _blocked()
+
+
+# Network guard first, so even import-time code in backend modules cannot connect.
+socket.socket.connect = _guarded_connect
+socket.socket.connect_ex = _guarded_connect_ex
+socket.socket.sendto = _guarded_sendto
+if _REAL_SENDMSG is not None:
+    socket.socket.sendmsg = _guarded_sendmsg
+socket.create_connection = _blocked
+socket.getaddrinfo = _blocked
+
+# Path retargeting at import, before any test module imports `backend`.
+import backend.claims as _claims  # noqa: E402
+import backend.config as _config  # noqa: E402
+import backend.main as _main  # noqa: E402
+import backend.roundtable as _roundtable  # noqa: E402
+import backend.settings as _settings  # noqa: E402
+import backend.storage as _storage  # noqa: E402
+
+_CONVERSATIONS = ISOLATED_DATA_DIR / "conversations"
+_config.DATA_DIR = str(_CONVERSATIONS)
+_config.DEBUG_PROMPTS_DIR = str(ISOLATED_DATA_DIR / "debug" / "prompts")
+_storage.DATA_DIR = str(_CONVERSATIONS)
+_storage.RUNS_DIR = ISOLATED_DATA_DIR / "runs"
+_settings.SETTINGS_FILE = ISOLATED_DATA_DIR / "settings.json"
+_roundtable.DEBUG_DIR = ISOLATED_DATA_DIR / "debug" / "prompts"
+_main.MODE_SESSIONS_DIR = ISOLATED_DATA_DIR / "mode_sessions"
+_CLAIMS_DIR = ISOLATED_DATA_DIR / "claims"
+_claims.DATA_DIR = ISOLATED_DATA_DIR
+_claims.CLAIMS_DIR = _CLAIMS_DIR
+_claims.CLAIMS_FILE = _CLAIMS_DIR / "claims.json"
+_claims.LOCK_FILE = _CLAIMS_DIR / "claims.json.lock"
+_claims.HISTORY_DIR = _CLAIMS_DIR / "history"
 
 
 # Mock response generator for deterministic testing

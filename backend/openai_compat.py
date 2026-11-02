@@ -22,10 +22,19 @@ from .settings import get_settings
 class RoundtableFailedError(Exception):
     """The council produced no answer; /v1 must not present this as a successful completion."""
 
-    def __init__(self, message: str, outcome: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        message: str,
+        outcome: dict[str, Any] | None = None,
+        *,
+        status_code: int = 502,
+        error_type: str = "roundtable_failed",
+    ):
         super().__init__(message)
         self.message = message
         self.outcome = outcome or {}
+        self.status_code = status_code
+        self.error_type = error_type
 
 
 def _outcome(run: dict[str, Any] | None) -> dict[str, Any]:
@@ -35,6 +44,19 @@ def _outcome(run: dict[str, Any] | None) -> dict[str, Any]:
         "failure_reason": run.get("failure_reason"),
         "failed_seats": run.get("failed_seats", []),
     }
+
+
+def roundtable_route_problems(request: "ChatCompletionRequest", settings: Any = None) -> list[str]:
+    """Fail-closed route preflight for a /v1 request, using the same resolution as the generators."""
+    settings = settings or get_settings()
+    council_models = request.council_models or settings.council_models
+    moderator_model = request.moderator_model or settings.chairman_model
+    chair_model = request.chair_model or settings.chairman_model
+    return preflight_roundtable_models(council_models, moderator_model, chair_model, settings)
+
+
+def _failure_text_safe(e: BaseException) -> str:
+    return str(e).strip() or type(e).__name__
 
 
 def _degraded_notice(outcome: dict[str, Any]) -> str:
@@ -572,6 +594,7 @@ async def generate_non_streaming_response(
     # Collect final content
     final_content = ""
     failed_outcome: dict[str, Any] | None = None
+    raise_after: RoundtableFailedError | None = None
 
     try:
         async for event in run_roundtable(
@@ -587,10 +610,20 @@ async def generate_non_streaming_response(
             request=http_request,
         ):
             if event.get("type") == "roundtable_budget_exceeded":
-                final_content = (
+                budget_message = (
                     f"Error: predicted {event.get('predicted_calls')} model calls exceed "
                     f"roundtable_max_calls_per_run={event.get('max_calls_per_run')}. "
                     "Quota units are unknown, not zero."
+                )
+                raise_after = RoundtableFailedError(
+                    budget_message,
+                    {"status": "budget_exceeded", "failed_seats": []},
+                    status_code=429,
+                    error_type="roundtable_budget_exceeded",
+                )
+            elif event.get("type") == "roundtable_aborted":
+                raise_after = RoundtableFailedError(
+                    "[Roundtable was aborted]", _outcome(event.get("run")), error_type="roundtable_aborted"
                 )
             elif event.get("type") == "chair_complete":
                 chair_final = event.get("chair_final", {})
@@ -604,8 +637,16 @@ async def generate_non_streaming_response(
                 failed_outcome = _outcome(event.get("run"))
 
     except Exception as e:
-        final_content = f"Error during roundtable: {str(e)}"
+        raise_after = RoundtableFailedError(
+            f"Error during roundtable: {_failure_text_safe(e)}",
+            {"status": "error", "failed_seats": []},
+            status_code=500,
+            error_type="roundtable_error",
+        )
 
+    if raise_after is not None:
+        # Budget-rejected and aborted runs produced no council answer: not a success.
+        raise raise_after
     if failed_outcome is not None:
         # A completely failed council is an error, not a successful completion.
         raise RoundtableFailedError(_failed_notice(failed_outcome), failed_outcome)

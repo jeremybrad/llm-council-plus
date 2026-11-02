@@ -31,6 +31,7 @@ from .openai_compat import (
     RoundtableFailedError,
     generate_non_streaming_response,
     generate_openai_stream,
+    roundtable_route_problems,
 )
 from .openai_compat import get_available_models as get_roundtable_models
 from .roundtable import CAPTURABLE_RUN_STATUSES, MAX_EXECUTED_ROUNDS, get_default_council, run_roundtable
@@ -298,7 +299,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                         agents=agents,
                         moderator_model=moderator_model,
                         chair_model=chair_model,
-                        num_rounds=num_rounds,
+                        num_rounds=requested_rounds,  # the engine caps and records both counts
                         context=search_context,
                         max_parallel=max_parallel,
                         request=request,
@@ -361,13 +362,13 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                             run_data = event.get("run")
                             yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
-                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'status': 'budget_exceeded', 'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Predicted call budget exceeded', 'data': {'status': 'budget_exceeded', 'failure_reason': (run_data or {}).get('failure_reason'), 'predicted_calls': event.get('predicted_calls'), 'max_calls_per_run': event.get('max_calls_per_run'), 'quota_units': event.get('quota_units'), 'run': run_data}})}\n\n"
 
                         elif event_type == "roundtable_aborted":
                             run_data = event.get("run")
                             yield f"data: {json.dumps({'type': 'roundtable_accounting', 'data': (run_data or {}).get('call_accounting')})}\n\n"
                             aborted = True
-                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted', 'data': {'status': 'aborted'}})}\n\n"
+                            yield f"data: {json.dumps({'type': 'roundtable_error', 'message': 'Roundtable was aborted', 'data': {'status': 'aborted', 'failure_reason': (run_data or {}).get('failure_reason'), 'failed_seats': (run_data or {}).get('failed_seats', [])}})}\n\n"
 
                         else:
                             # Forward unknown events as-is
@@ -401,7 +402,7 @@ async def send_message_stream(conversation_id: str, body: SendMessageRequest, re
                     storage.add_roundtable_message(
                         conversation_id=conversation_id,
                         run_id=run_data["run_id"],
-                        chair_final=run_data.get("chair_final", {}),
+                        chair_final=run_data.get("chair_final") or {},
                         metadata={
                             "execution_mode": "roundtable",
                             "status": run_data.get("status"),
@@ -1537,6 +1538,20 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
     - "roundtable:deep" - requests 5 rounds; executes 3 (capped)
     - "roundtable:N" - N rounds (e.g., "roundtable:2")
     """
+    # Fail-closed preflight before any response starts, so a refused route is an HTTP
+    # error on both paths rather than a 200 whose content says "Error" (WOR-1016).
+    route_problems = roundtable_route_problems(body)
+    if route_problems:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Roundtable refused before any model call: " + "; ".join(route_problems),
+                    "type": "roundtable_refused",
+                    "code": "route_refused",
+                }
+            },
+        )
     if body.stream:
         return StreamingResponse(
             generate_openai_stream(body, request),
@@ -1552,11 +1567,11 @@ async def openai_chat_completions(body: ChatCompletionRequest, request: Request)
             return await generate_non_streaming_response(body, request)
         except RoundtableFailedError as e:
             return JSONResponse(
-                status_code=502,
+                status_code=e.status_code,
                 content={
                     "error": {
                         "message": e.message,
-                        "type": "roundtable_failed",
+                        "type": e.error_type,
                         "code": e.outcome.get("status") or "failed",
                         "failed_seats": e.outcome.get("failed_seats", []),
                     }

@@ -85,7 +85,8 @@ class RoundtableRun:
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: str | None = None
     requested_rounds: int | None = None  # what the caller asked for (diagnostics)
-    executed_rounds: int | None = None  # what the engine runs (capped at MAX_EXECUTED_ROUNDS)
+    planned_rounds: int | None = None  # requested, capped at MAX_EXECUTED_ROUNDS
+    executed_rounds: int | None = None  # rounds that actually ran, set at the terminal event
     failure_reason: str | None = None  # why the run is not fully completed
     failed_seats: list[str] = field(default_factory=list)
 
@@ -115,6 +116,7 @@ class RoundtableRun:
             "created_at": self.created_at,
             "completed_at": self.completed_at,
             "requested_rounds": self.requested_rounds,
+            "planned_rounds": self.planned_rounds,
             "executed_rounds": self.executed_rounds,
             "failure_reason": self.failure_reason,
             "failed_seats": list(self.failed_seats),
@@ -229,7 +231,9 @@ class CallAccountant:
             {
                 "model": model,
                 "failed": error,
-                "error_message": (result or {}).get("error_message") if error else None,
+                "error_message": ((result or {}).get("error_message") or "failed (no message recorded)")
+                if error
+                else None,
             }
         )
 
@@ -247,7 +251,9 @@ class CallAccountant:
         item["open"] = False
         item["failed"] = failed or bool(result and result.get("error"))
         if item["failed"]:
-            item["error_message"] = (result or {}).get("error_message") or item["error_message"]
+            item["error_message"] = (
+                (result or {}).get("error_message") or item["error_message"] or "failed (no message recorded)"
+            )
 
     def close_open(self, *, failed: bool = True) -> None:
         for item in self.attempts:
@@ -551,7 +557,7 @@ async def query_agent(
 
     except asyncio.CancelledError:
         if accountant is not None and attempt is not None:
-            accountant.finish(attempt, failed=True)
+            accountant.finish(attempt, {"error": True, "error_message": "cancelled"})
         raise
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
@@ -733,7 +739,7 @@ async def run_roundtable(
     predict_roundtable_calls(len(agents), requested_rounds)  # rejects < 1 agents/rounds
     num_rounds = min(requested_rounds, MAX_EXECUTED_ROUNDS)
     run.requested_rounds = requested_rounds
-    run.executed_rounds = num_rounds
+    run.planned_rounds = num_rounds
     predicted = predict_roundtable_calls(len(agents), num_rounds)
     budget = int(getattr(settings, "roundtable_max_calls_per_run", DEFAULT_MAX_CALLS_PER_RUN))
     subscription_parallel = int(
@@ -769,6 +775,7 @@ async def run_roundtable(
     if predicted > budget:
         run.status = "budget_exceeded"
         run.failure_reason = f"predicted {predicted} calls exceed roundtable_max_calls_per_run={budget}"
+        run.executed_rounds = 0
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()
         yield {
@@ -819,6 +826,7 @@ async def run_roundtable(
             run.status = "failed"
             run.failure_reason = "no council seat succeeded in round 1"
             run.failed_seats = _ordered_failed_seats(run.rounds, [a.label for a in agents])
+            run.executed_rounds = len(run.rounds)
             run.completed_at = datetime.utcnow().isoformat()
             run.call_accounting = accountant.snapshot()
             yield {"type": "roundtable_failed", "failure_reason": run.failure_reason, "run": run.to_dict()}
@@ -957,10 +965,11 @@ async def run_roundtable(
             accountant.finish(mod_attempt, run.moderator_summary)
 
         except Exception as e:
+            mod_failure = {"error": True, "error_message": _failure_text(e, type(e).__name__)}
             if accountant.attempts and accountant.attempts[-1]["model"] == moderator_model:
-                accountant.finish(len(accountant.attempts) - 1, failed=True)
+                accountant.finish(len(accountant.attempts) - 1, mod_failure)
             else:
-                accountant.observe(moderator_model, failed=True)
+                accountant.observe(moderator_model, mod_failure, failed=True)
             logger.error(f"Moderator synthesis failed: {e!r}")
             run.moderator_summary = {
                 "model": moderator_model,
@@ -1012,10 +1021,11 @@ async def run_roundtable(
             accountant.finish(chair_attempt, run.chair_final)
 
         except Exception as e:
+            chair_failure = {"error": True, "error_message": _failure_text(e, type(e).__name__)}
             if accountant.attempts and accountant.attempts[-1]["model"] == chair_model:
-                accountant.finish(len(accountant.attempts) - 1, failed=True)
+                accountant.finish(len(accountant.attempts) - 1, chair_failure)
             else:
-                accountant.observe(chair_model, failed=True)
+                accountant.observe(chair_model, chair_failure, failed=True)
             logger.error(f"Chair synthesis failed: {e!r}")
             run.chair_final = {
                 "model": chair_model,
@@ -1027,6 +1037,7 @@ async def run_roundtable(
         run.status, run.failure_reason, run.failed_seats = derive_run_outcome(
             run.rounds, run.moderator_summary, run.chair_final, [a.label for a in agents]
         )
+        run.executed_rounds = len(run.rounds)
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()
 
@@ -1041,6 +1052,9 @@ async def run_roundtable(
     except asyncio.CancelledError:
         accountant.close_open(failed=True)
         run.status = "aborted"
+        run.failure_reason = "run cancelled before completion (client disconnected or task cancelled)"
+        run.failed_seats = _ordered_failed_seats(run.rounds, [a.label for a in agents])
+        run.executed_rounds = len(run.rounds)
         run.completed_at = datetime.utcnow().isoformat()
         run.call_accounting = accountant.snapshot()
         yield {"type": "roundtable_aborted", "run": run.to_dict()}

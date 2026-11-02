@@ -490,7 +490,7 @@ async def test_ui_stream_capture_gate_and_outcome(monkeypatch, terminal, status,
         yield {"type": terminal, "run": run, "chair_final": run["chair_final"], "predicted_calls": 4}
 
     events, mocks, capture = await _collect_main_stream(monkeypatch, _ui_settings(), fake_roundtable)
-    assert seen["num_rounds"] == 3  # requested 5, capped before the engine is called
+    assert seen["num_rounds"] == 5  # the engine receives the request and records both counts
     start = next(e for e in events if e["type"] == "roundtable_start")
     assert start["data"]["num_rounds"] == 3 and start["data"]["requested_rounds"] == 5
     terminal_events = [e for e in events if e["type"] in {"roundtable_complete", "roundtable_error"}]
@@ -560,6 +560,7 @@ async def test_v1_route_returns_502_for_failed_council(monkeypatch):
         raise openai_compat.RoundtableFailedError("[Roundtable failed: x]", {"status": "failed", "failed_seats": []})
 
     monkeypatch.setattr(main, "generate_non_streaming_response", failing)
+    monkeypatch.setattr(openai_compat, "get_settings", _v1_settings)  # routes pass preflight
     response = await main.openai_chat_completions(_v1_request(False), SimpleNamespace())
     assert response.status_code == 502
     body = json.loads(response.body)
@@ -699,3 +700,232 @@ async def test_anthropic_key_check_makes_no_inference_request(monkeypatch):
     get.assert_awaited_once()
     assert get.await_args.args[0].endswith("/models")
     assert result["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Round-1 review repairs (R1-G1..G20).
+# ---------------------------------------------------------------------------
+
+
+def test_isolation_is_installed_at_conftest_import():
+    from tests import conftest
+
+    assert socket.getaddrinfo is conftest._blocked
+    assert socket.create_connection is conftest._blocked
+    with pytest.raises(NetworkBlockedError):
+        socket.getaddrinfo("example.com", 443)
+    for name in ("MISTRAL_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY"):
+        assert name not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_enabled_non_metered_route_dispatches_exactly_once(monkeypatch):
+    spy = AsyncMock(return_value={"content": "local answer"})
+    monkeypatch.setattr(council.PROVIDERS["ollama"], "query", spy)
+    monkeypatch.setattr(council, "get_settings", lambda: _settings(ollama=True))
+    result = await council.query_model(" ollama:llama3.2 ", [{"role": "user", "content": "q"}])
+    assert result == {"content": "local answer"}
+    spy.assert_awaited_once()
+    assert spy.await_args.args[0] == "ollama:llama3.2"
+
+
+@pytest.mark.parametrize("model", ["ollama:", "ollama:   ", "agentcli:"])
+def test_known_prefix_without_model_name_is_refused(model):
+    reason = council.check_model_route(model, _settings(ollama=True, agentcli=True))
+    assert reason and "no model name" in reason
+
+
+@pytest.mark.asyncio
+async def test_moderator_and_chair_exceptions_keep_ledger_reasons():
+    def raising(model):
+        return {"content": "ok"}
+
+    async def fake(model, messages, timeout=120.0, temperature=0.5):
+        if model == "mock:moderator":
+            raise RuntimeError("")
+        if model == "mock:chair":
+            raise ValueError("chair boom")
+        return raising(model)
+
+    run = (await _run(fake, _agents(2), num_rounds=1))[-1]["run"]
+    attempts = {a["model"]: a for a in run["call_accounting"]["attempts"]}
+    assert attempts["mock:moderator"]["failed"] and attempts["mock:moderator"]["error_message"] == "RuntimeError"
+    assert attempts["mock:chair"]["error_message"] == "chair boom"
+    assert run["status"] == "failed" and run["chair_final"]["error_message"] == "chair boom"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_records_reason_and_cancelled_attempts():
+    import asyncio
+
+    started = asyncio.Event()
+
+    async def slow(model, messages, timeout=120.0, temperature=0.5):
+        started.set()
+        await asyncio.sleep(30)
+        return {"content": "never"}
+
+    events = []
+
+    async def drive():
+        with (
+            patch("backend.roundtable.query_model", slow),
+            patch("backend.roundtable.get_settings", return_value=_rt_settings()),
+        ):
+            async for e in run_roundtable(
+                conversation_id="c",
+                question="q",
+                agents=_agents(2),
+                moderator_model="mock:moderator",
+                chair_model="mock:chair",
+                num_rounds=1,
+            ):
+                events.append(e)
+
+    task = asyncio.create_task(drive())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    run = events[-1]["run"]
+    assert events[-1]["type"] == "roundtable_aborted"
+    assert run["status"] == "aborted" and run["failure_reason"]
+    assert run["executed_rounds"] == 0
+    assert all(a["error_message"] == "cancelled" for a in run["call_accounting"]["attempts"])
+
+
+@pytest.mark.asyncio
+async def test_executed_rounds_reflect_what_ran():
+    fail, _ = _scripted(lambda m: {"error": True, "error_message": "down"})
+    assert (await _run(fail, _agents(2)))[-1]["run"]["executed_rounds"] == 1
+    ok, _ = _scripted(lambda m: {"content": "ok"})
+    budget = (await _run(ok, _agents(3), num_rounds=3, budget=5))[-1]["run"]
+    assert budget["executed_rounds"] == 0 and budget["planned_rounds"] == 3
+    deep = (await _run(ok, _agents(2), num_rounds=5))[-1]["run"]
+    assert (deep["requested_rounds"], deep["planned_rounds"], deep["executed_rounds"]) == (5, 3, 3)
+
+
+@pytest.mark.asyncio
+async def test_whitespace_seat_content_is_a_failure():
+    fake, _ = _scripted(lambda m: {"content": "  \n "} if m == "mock:skeptic" else {"content": "ok"})
+    run = (await _run(fake, _agents(2), num_rounds=1))[-1]["run"]
+    assert run["status"] == "degraded" and run["failed_seats"] == ["Skeptic"]
+
+
+@pytest.mark.parametrize(
+    "chair",
+    [{"content": "", "error": False}, {"content": "   ", "error": False}, {"content": "x", "error": True}],
+)
+def test_capture_refuses_completed_run_without_chair_answer(chair, monkeypatch):
+    append = Mock()
+    monkeypatch.setattr(turn_capture, "append_turns", append)
+    run = _run_dict("completed")
+    run["chair_final"] = {"model": "m", **chair}
+    assert turn_capture.capture_run(run, session_id="no-chair") is None
+    append.assert_not_called()
+
+
+def test_captured_turns_carry_failure_reason():
+    out = turn_capture.capture_run(_run_dict("degraded"), session_id="reason-check")
+    meta = [json.loads(line)["meta"] for line in Path(out).read_text().splitlines()]
+    assert {m["failure_reason"] for m in meta} == {"degraded reason"}
+
+
+async def _route(monkeypatch, settings_obj, fake=None, stream=False):
+    monkeypatch.setattr(openai_compat, "get_settings", lambda: settings_obj)
+    if fake is not None:
+        monkeypatch.setattr(openai_compat, "run_roundtable", fake)
+    return await main.openai_chat_completions(_v1_request(stream), SimpleNamespace())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_v1_route_preflight_refusal_is_http_400(monkeypatch, stream):
+    bad = SimpleNamespace(**{**vars(_v1_settings()), "council_models": ["ollama:a", "openai:gpt-4o"]})
+    roundtable = Mock(side_effect=AssertionError("must not start"))
+    response = await _route(monkeypatch, bad, roundtable, stream=stream)
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"]["type"] == "roundtable_refused" and "metered" in body["error"]["message"]
+    roundtable.assert_not_called()
+
+
+def _terminal(event):
+    async def fake(**kwargs):
+        yield {"type": "roundtable_init", "total_rounds": 1, "council_members": [{}, {}]}
+        yield event
+
+    return fake
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "status", "etype"),
+    [
+        (
+            {"type": "roundtable_failed", "run": {**_run_dict("failed"), "failure_reason": "no seat"}},
+            502,
+            "roundtable_failed",
+        ),
+        (
+            {"type": "roundtable_budget_exceeded", "predicted_calls": 22, "max_calls_per_run": 14, "run": {}},
+            429,
+            "roundtable_budget_exceeded",
+        ),
+        ({"type": "roundtable_aborted", "run": _run_dict("aborted")}, 502, "roundtable_aborted"),
+    ],
+)
+async def test_v1_route_non_success_terminals_are_http_errors(monkeypatch, event, status, etype):
+    response = await _route(monkeypatch, _v1_settings(), _terminal(event))
+    assert response.status_code == status
+    body = json.loads(response.body)
+    assert body["error"]["type"] == etype and "choices" not in body
+
+
+@pytest.mark.asyncio
+async def test_v1_route_engine_exception_is_http_500(monkeypatch):
+    async def exploding(**kwargs):
+        raise ValueError("roundtable requires at least one round")
+        yield  # pragma: no cover
+
+    response = await _route(monkeypatch, _v1_settings(), exploding)
+    assert response.status_code == 500
+    assert "at least one round" in json.loads(response.body)["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_v1_route_completed_council_is_http_200(monkeypatch):
+    run = _run_dict("completed")
+    response = await _route(
+        monkeypatch,
+        _v1_settings(),
+        _terminal({"type": "chair_complete", "chair_final": run["chair_final"], "run": run}),
+    )
+    assert response.choices[0].message.content == "answer"
+
+
+@pytest.mark.asyncio
+async def test_ui_stream_terminal_data_carries_reasons(monkeypatch):
+    for terminal, status in (("roundtable_aborted", "aborted"), ("roundtable_budget_exceeded", "budget_exceeded")):
+        run = _run_dict(status)
+
+        async def fake(_terminal=terminal, _run=run, **kwargs):
+            yield {"type": _terminal, "run": _run, "predicted_calls": 22}
+
+        events, mocks, _ = await _collect_main_stream(monkeypatch, _ui_settings(), fake)
+        err = [e for e in events if e["type"] == "roundtable_error"][-1]
+        assert err["data"]["status"] == status
+        assert err["data"]["failure_reason"] == f"{status} reason"
+        assert mocks["add_roundtable_message"].call_args.kwargs["chair_final"] == run["chair_final"]
+
+
+@pytest.mark.asyncio
+async def test_ui_stream_stores_empty_dict_when_chair_final_null(monkeypatch):
+    run = _run_dict("failed")
+    run["chair_final"] = None
+
+    async def fake(**kwargs):
+        yield {"type": "roundtable_failed", "run": run}
+
+    _, mocks, _ = await _collect_main_stream(monkeypatch, _ui_settings(), fake)
+    assert mocks["add_roundtable_message"].call_args.kwargs["chair_final"] == {}
