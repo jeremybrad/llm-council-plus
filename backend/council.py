@@ -128,7 +128,8 @@ def get_provider_for_model(model_id: str) -> Any:
     """Determine the provider for a model ID. Raises ModelRouteError; never falls back.
 
     Metered API providers are refused here too (defense in depth behind check_model_route),
-    so no caller can obtain a metered provider object for dispatch.
+    so this lookup never returns a metered provider. The provider objects themselves still
+    live in PROVIDERS; dispatch goes only through query_model, which a static test pins.
     """
     name = _provider_name(model_id)
     if name in METERED_API_PROVIDERS:

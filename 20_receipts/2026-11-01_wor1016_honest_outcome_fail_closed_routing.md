@@ -72,14 +72,23 @@ The repairs:
 ## Round-2 independent review (guarded hermetic Grok, grok-4.7, head `93495cc`)
 
 The reviewer confirmed the round-1 repairs and raised 8 findings (R2-F1..F8). R2-F1 was rejected: `CallAccountant.close_open` already records `cancelled` for in-flight moderator and chair attempts; its missing test was adopted under R2-F8. The other 7 were adopted:
-- **Blank chair answers on `/v1` (F2):** a whitespace or `null` chair answer is a failure (502, or a streaming failure notice), not a 200.
+- **Blank chair answers on `/v1` (F2):** a whitespace or `null` chair answer is a failure: HTTP 502 when non-streaming; when streaming (already HTTP 200 once the body starts) an explicit failure notice.
 - **Request-shape refusals (F3, F4):** no user message, or fewer than 2 council models, is HTTP 400 at the route. The non-streaming generator raises a 400 `RoundtableFailedError` for its own preflight instead of returning a 200 "Error" answer. An engine run that ends without a terminal answer is 502 (`roundtable_incomplete`), or a streaming failure notice; the "No response generated." 200 fallback is gone.
 - **Reasons in error bodies (F5):** `/v1` error bodies carry `failure_reason`; the budget rejection keeps the run's reason.
-- **Defense in depth (F6):** `get_provider_for_model` refuses metered providers, and a static AST test asserts `council.query_model` is the only caller of a provider `query()`.
+- **Defense in depth (F6):** `get_provider_for_model` refuses metered providers, and a static AST test asserts that the only `.query` reference in `backend/` is inside `council.query_model` (round 3 widened it from direct calls to every attribute reference and `getattr(..., "query")`).
 - **Docs and dead code (F7):** the remaining OpenRouter inference body was removed; the resolver guards were extended; docs state the guarantees precisely.
 - **Test strength (F8):** the import-time isolation test now checks the guards recorded at conftest import, the full key-scrub list and `sendto`/`connect_ex` on an INET socket; the OpenRouter spy also covers `httpx.AsyncClient.send`; moderator and chair cancellation are tested.
 
 19 of the new tests failed against `93495cc` with the new conftest (RED); all pass at the repair head.
+
+## Round-3 independent review (guarded hermetic Grok, grok-4.7, head `8dca2aa`)
+
+The reviewer confirmed R2-F3, F5 and F7 fixed and the rest mostly fixed, and raised 8 findings. Rejected with evidence: R3-2 (the streaming generator's contract is an SSE body; the route already returns 400 before streaming; its comment was corrected), R3-4 (`query_models_parallel` imports `asyncio` locally; now covered by a test) and R3-5 (the network guard raises a `RuntimeError` on purpose so `except OSError` handlers cannot swallow a blocked call). Adopted and repaired:
+- **R3-1:** a blank chair answer is reported as `failed` (error `code`) even when the run recorded `completed` or `degraded`.
+- **R3-3:** a whitespace-only user message is refused with 400.
+- **R3-6:** the static dispatch test counts every `.query` attribute reference and `getattr(..., "query")`, not just direct calls; docs state what it proves.
+- **R3-7:** comments, CLAUDE.md and this receipt were corrected.
+- **R3-8:** tests assert error `code`/`failure_reason`, drive streaming fakes explicitly, add positive `get_provider_for_model` cases for `ollama`/`agentcli`, cover `query_models_parallel`, the 400 `failure_reason` and the streaming abort reason.
 
 ## Evidence
 

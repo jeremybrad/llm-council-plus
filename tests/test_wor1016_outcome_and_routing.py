@@ -1011,16 +1011,22 @@ async def test_cancel_during_moderator_or_chair_records_cancelled(model):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "degraded"])
 @pytest.mark.parametrize("content", ["   ", "\n\t", None])
-async def test_v1_blank_chair_answer_is_never_success(monkeypatch, content):
-    run = _run_dict("completed")
+async def test_v1_blank_chair_answer_is_never_success(monkeypatch, content, status):
+    run = _run_dict(status)
     run["chair_final"] = {"model": "ollama:c", "content": content, "error": False}
-    event = {"type": "chair_complete", "chair_final": run["chair_final"], "run": run}
-    response = await _route(monkeypatch, _v1_settings(), _terminal(event))
+    fake = _terminal({"type": "chair_complete", "chair_final": run["chair_final"], "run": run})
+    response = await _route(monkeypatch, _v1_settings(), fake)
     assert response.status_code == 502
+    error = json.loads(response.body)["error"]
     assert "choices" not in json.loads(response.body)
+    assert error["type"] == "roundtable_failed" and error["code"] == "failed"
+    assert error["failure_reason"]
+    monkeypatch.setattr(openai_compat, "run_roundtable", fake)
     text = "".join([c async for c in openai_compat.generate_openai_stream(_v1_request(True))])
-    assert "Roundtable failed" in text
+    expected = "the chair returned no answer" if status == "completed" else "degraded reason"
+    assert f"Roundtable failed: {expected}" in text and error["failure_reason"] == expected
 
 
 @pytest.mark.asyncio
@@ -1060,6 +1066,7 @@ async def test_v1_no_terminal_event_is_an_error(monkeypatch):
     response = await _route(monkeypatch, _v1_settings(), silent)
     assert response.status_code == 502
     assert json.loads(response.body)["error"]["type"] == "roundtable_incomplete"
+    monkeypatch.setattr(openai_compat, "run_roundtable", silent)
     text = "".join([c async for c in openai_compat.generate_openai_stream(_v1_request(True))])
     assert "Roundtable failed: the roundtable ended without an answer" in text
 
@@ -1096,18 +1103,74 @@ def test_get_provider_for_model_refuses_metered(provider):
         council.get_provider_for_model(f"{provider}:some-model")
 
 
-def test_provider_query_is_dispatched_from_one_place_only():
-    """Static guard: council.query_model is the only caller of a provider's .query()."""
+def test_provider_query_is_referenced_from_one_place_only():
+    """Static guard: the only `.query` reference in backend/ is inside council.query_model.
+
+    Counts every attribute reference named `query` (calls, aliases such as `fn = p.query`,
+    module-level code) and every `getattr(..., "query")`, in every backend module.
+    """
     import ast
 
     backend_dir = Path(council.__file__).parent
-    callers = []
+    refs = []
     for path in sorted(backend_dir.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
+        owner = {}
         for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "query":
-                    callers.append(f"{path.relative_to(backend_dir)}:{fn.name}")
-    assert sorted(set(callers)) == ["council.py:query_model"]
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for node in ast.walk(fn):
+                    owner.setdefault(id(node), fn.name)
+        for node in ast.walk(tree):
+            is_attr = isinstance(node, ast.Attribute) and node.attr == "query"
+            is_getattr = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) > 1
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "query"
+            )
+            if is_attr or is_getattr:
+                refs.append(f"{path.relative_to(backend_dir)}:{owner.get(id(node), '<module>')}")
+    assert refs == ["council.py:query_model"]
+
+
+@pytest.mark.parametrize("model", ["ollama:llama3.2", "agentcli:claude"])
+def test_get_provider_for_model_still_returns_non_metered(model):
+    assert council.get_provider_for_model(model) is council.PROVIDERS[model.split(":")[0]]
+
+
+@pytest.mark.asyncio
+async def test_openrouter_parallel_helper_refuses_without_http(monkeypatch):
+    from backend import openrouter as openrouter_module
+
+    send = AsyncMock(side_effect=AssertionError("no HTTP request may be made"))
+    monkeypatch.setattr("httpx.AsyncClient.send", send)
+    models = [f"m{i}" for i in range(7)]  # >= 6 exercises the batched branch too
+    results = await openrouter_module.query_models_parallel(models, [{"role": "user", "content": "q"}])
+    assert set(results) == set(models)
+    assert all(r["error"] is True and "metered" in r["error_message"] for r in results.values())
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_v1_whitespace_user_message_is_refused(monkeypatch, stream):
+    monkeypatch.setattr(openai_compat, "run_roundtable", Mock(side_effect=AssertionError("must not start")))
+    monkeypatch.setattr(openai_compat, "get_settings", _v1_settings)
+    blank = openai_compat.ChatCompletionRequest(
+        model="roundtable", messages=[openai_compat.ChatMessage(role="user", content=" \n ")], stream=stream
+    )
+    response = await main.openai_chat_completions(blank, SimpleNamespace())
+    assert response.status_code == 400
+    error = json.loads(response.body)["error"]
+    assert error["type"] == "roundtable_refused" and "no user message" in error["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_v1_streaming_abort_carries_reason(monkeypatch):
+    fake = _terminal({"type": "roundtable_aborted", "run": _run_dict("aborted")})
+    monkeypatch.setattr(openai_compat, "get_settings", _v1_settings)
+    monkeypatch.setattr(openai_compat, "run_roundtable", fake)
+    text = "".join([c async for c in openai_compat.generate_openai_stream(_v1_request(True))])
+    assert "[Roundtable was aborted: aborted reason]" in text

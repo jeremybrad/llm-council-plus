@@ -508,11 +508,13 @@ operator's $0 metered-model budget, every API-key-backed route (`openrouter`, `o
 verified) is refused **unconditionally**, whatever the settings say. There is no paid-provider
 exception in code. The remaining inference routes are local `ollama` and the guarded subscription
 `agentcli` seats, each only when enabled. `council.get_provider_for_model` also refuses metered
-providers, and `council.query_model` is the only caller of a provider's `query()` (enforced by a
-static test). Every provider's `validate_key` uses a model-list GET request, not inference (the
-Anthropic check lists models instead of sending a message); `openrouter.query_model` no longer
-contains an HTTP implementation. Provider classes still hold direct HTTP code for their own
-`query()`, reachable only through `query_model`.
+providers. A static test asserts that the only reference to a `.query` attribute (or
+`getattr(..., "query")`) anywhere in `backend/` is inside `council.query_model`, so no other
+backend code calls a provider's `query()`; the provider objects (including the metered classes,
+which still hold their upstream HTTP `query()` code) remain in `council.PROVIDERS`. Every
+provider's `validate_key` uses a model-list GET request, not inference (the Anthropic check lists
+models instead of sending a message); `openrouter.query_model` no longer contains an HTTP
+implementation.
 Whether Ollama Cloud models routed through a local Ollama daemon count as metered is an open
 WOR-362 question and is not decided here.
 
@@ -533,8 +535,10 @@ in `turn_capture.capture_run`); captured turns carry `run_status`, `failed_seats
 
 `/v1` never presents a non-answer as a successful completion. A route refused by the preflight is
 HTTP 400 (`roundtable_refused`) on both the streaming and non-streaming paths, checked before the
-response starts; so is a request with no user message or fewer than 2 council models.
-Non-streaming: a failed council, a blank or whitespace chair answer, an aborted run, or an engine
+response starts; so is a request with no (or only whitespace) user message or fewer than 2
+council models.
+Non-streaming: a failed council, a blank or whitespace chair answer (reported as `failed` whatever
+status the run recorded), an aborted run, or an engine
 run that ends without a terminal answer is HTTP 502; a budget rejection is HTTP 429; an engine
 exception is HTTP 500. Each has an OpenAI-style `error` body carrying `failure_reason`. Streaming
 cannot change status once started, so those cases emit an explicit notice instead. Degraded answers

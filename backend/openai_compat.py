@@ -81,6 +81,14 @@ def _chair_text(chair_final: dict[str, Any] | None) -> str:
     return content if content.strip() else ""
 
 
+def _no_answer_outcome(outcome: dict[str, Any]) -> dict[str, Any]:
+    """A run whose chair produced no answer is failed, whatever status the run recorded."""
+    if outcome.get("status") == "failed":
+        return outcome
+    reason = outcome.get("failure_reason")
+    return {**outcome, "status": "failed", "failure_reason": reason or "the chair returned no answer"}
+
+
 def _failure_text_safe(e: BaseException) -> str:
     return str(e).strip() or type(e).__name__
 
@@ -179,7 +187,7 @@ def extract_user_question(messages: list[ChatMessage]) -> str:
     # Find the last user message
     for msg in reversed(messages):
         if msg.role == "user":
-            return msg.content
+            return msg.content if (msg.content or "").strip() else ""
     return ""
 
 
@@ -316,8 +324,9 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
         request.timeout_seconds if request.timeout_seconds is not None else settings.roundtable_timeout_seconds
     )
 
-    # The /v1 route refuses these with HTTP 400 before streaming starts; this in-stream
-    # notice only serves direct callers of the generator, which cannot change the status.
+    # The /v1 route refuses these with HTTP 400 before streaming starts, so on /v1 this is
+    # unreachable. For direct callers this generator's contract is an SSE body (the HTTP
+    # status belongs to whoever wraps it), so a refusal is an in-band terminal notice.
     route_problems = preflight_roundtable_models(council_models, moderator_model, chair_model, settings)
     if route_problems:
         error_chunk = ChatCompletionChunk(
@@ -474,7 +483,7 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
                 outcome = _outcome(event.get("run"))
                 final_content = _chair_text(event.get("chair_final"))
                 if outcome["status"] == "failed" or not final_content:
-                    final_content = _failed_notice(outcome)
+                    final_content = _failed_notice(_no_answer_outcome(outcome))
                 elif outcome["status"] == "degraded":
                     final_content = _degraded_notice(outcome) + final_content
                 answered = True
@@ -505,7 +514,8 @@ async def generate_openai_stream(request: ChatCompletionRequest, http_request: A
                 return
 
             elif event_type == "roundtable_aborted":
-                progress_msg = "\n\n[Roundtable was aborted]"
+                reason = _outcome(event.get("run")).get("failure_reason")
+                progress_msg = "\n\n[Roundtable was aborted" + (f": {reason}" if reason else "") + "]"
                 chunk = ChatCompletionChunk(
                     id=completion_id,
                     created=created,
@@ -640,7 +650,7 @@ async def generate_non_streaming_response(
                 outcome = _outcome(event.get("run"))
                 final_content = _chair_text(event.get("chair_final"))
                 if outcome["status"] == "failed" or not final_content:
-                    failed_outcome = outcome
+                    failed_outcome = _no_answer_outcome(outcome)
                 elif outcome["status"] == "degraded":
                     final_content = _degraded_notice(outcome) + final_content
             elif event.get("type") == "roundtable_failed":
@@ -655,7 +665,8 @@ async def generate_non_streaming_response(
         )
 
     if raise_after is not None:
-        # Refused, budget-rejected, aborted and errored runs produced no council answer.
+        # Budget-rejected, aborted and errored runs produced no council answer. (Refusals
+        # raise earlier, before the roundtable starts.)
         raise raise_after
     if failed_outcome is not None:
         # A completely failed council is an error, not a successful completion.
